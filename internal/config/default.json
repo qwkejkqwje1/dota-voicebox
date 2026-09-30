@@ -1,0 +1,77 @@
+{
+  "devices": {
+    "mic": "",
+    "voice_out": "CABLE Input",
+    "monitor": ""
+  },
+  "mic_gain": 1.0,
+  "ducking": 0.35,
+  "fx_on_sounds": false,
+  "monitor_volume": 0.8,
+
+  "ptt": {
+    "key": "",
+    "auto": true,
+    "lead_ms": 120,
+    "tail_ms": 200
+  },
+
+  "start_preset": "clean",
+  "sounds_dir": "sounds",
+  "tts_rate": 1,
+
+  "sounds": {
+    "siren":       { "files": ["builtin:siren"], "bus": "both", "cooldown": 3, "mode": "interrupt", "volume": 0.9 },
+    "wisdom_rune": { "files": ["builtin:wisdom_rune"], "bus": "monitor", "mode": "ignore" },
+    "mid_rune_6":  { "files": ["builtin:mid_rune_6"], "bus": "monitor", "mode": "ignore" },
+    "power_rune":  { "files": ["builtin:power_rune"], "bus": "monitor", "mode": "ignore" },
+    "bounty_rune": { "files": ["builtin:bounty_rune"], "bus": "monitor", "mode": "ignore" },
+    "rosh":        { "files": ["builtin:rosh"], "bus": "monitor" },
+    "low_hp":      { "files": ["builtin:danger"], "bus": "monitor", "cooldown": 8 }
+  },
+
+  "hotkeys": {
+    "Num1":   "sound:siren",
+    "Num2":   "sound:wisdom_rune@both",
+    "Num3":   "sound:mid_rune_6@both",
+    "Num0":   "preset:clean",
+    "Num4":   "preset:dead_inside",
+    "Num5":   "preset:dead_inside_max",
+    "Num6":   "preset:radio",
+    "Num7":   "preset:radio_broken",
+    "Num8":   "preset:megaphone",
+    "Num9":   "preset:robot",
+    "NumAdd": "preset:next",
+    "NumSub": "rosh",
+    "NumMul": "mic_monitor",
+    "NumDot": "stop",
+    "NumDiv": "reload"
+  },
+
+  "timers": [
+    { "id": "mid_rune_6",  "sound": "mid_rune_6",  "at": [360], "warn_before": 10 },
+    { "id": "wisdom_rune", "sound": "wisdom_rune", "start": 420, "every": 420, "warn_before": 20 },
+    { "id": "power_rune",  "sound": "power_rune",  "start": 360, "every": 120, "skip": [360], "warn_before": 10, "disabled": true },
+    { "id": "bounty_rune", "sound": "bounty_rune", "start": 180, "every": 180, "warn_before": 10, "disabled": true },
+    { "id": "stack",       "sound": "stack@monitor", "start": 50, "every": 60, "until": 1200, "disabled": true }
+  ],
+
+  "rosh": {
+    "sound": "rosh",
+    "aegis_warn": 30,
+    "min_warn": 30
+  },
+
+  "events": {
+    "low_hp": "low_hp"
+  },
+
+  "gsi": {
+    "enabled": true,
+    "addr": "127.0.0.1:3000",
+    "token": "voicebox",
+    "low_hp_percent": 25
+  },
+
+  "voice_presets": {}
+}

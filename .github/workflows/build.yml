@@ -1,0 +1,55 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+      - run: go vet ./...
+      - run: go test ./...
+
+  windows:
+    needs: test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+      - name: Build
+        shell: bash
+        env:
+          CGO_ENABLED: "1"
+        run: |
+          VER="${GITHUB_REF_NAME}"
+          go build -trimpath -ldflags "-s -w -X main.version=${VER}" -o dist/voicebox.exe ./cmd/voicebox
+          cp config.example.json dist/config.json
+          cp README.md dist/
+          mkdir -p dist/sounds dist/gsi
+          cp sounds/README.md dist/sounds/
+          cp gsi/*.cfg dist/gsi/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dota-voicebox-windows
+          path: dist/
+      - name: Zip
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: Compress-Archive -Path dist/* -DestinationPath dota-voicebox-${{ github.ref_name }}-windows.zip
+      - name: Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dota-voicebox-*.zip
