@@ -1,0 +1,398 @@
+'use strict';
+const TOKEN = new URLSearchParams(location.search).get('t') || '';
+let S = null;              // полное состояние (/api/state)
+let ST = null;             // живой статус
+let LV = {mic_in:0, voice_out:0, monitor:0};
+let page = 'home';
+const peaks = {mic_in:0, voice_out:0, monitor:0};
+
+// ---------- утилиты ----------
+function h(tag, attrs, ...kids) {
+  const el = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (v == null || v === false) continue;
+    if (k.startsWith('on')) el.addEventListener(k.slice(2), v);
+    else if (k === 'class') el.className = v;
+    else if (k === 'style') el.style.cssText = v;
+    else if (k in el && k !== 'list') el[k] = v;
+    else el.setAttribute(k, v === true ? '' : v);
+  }
+  for (const k of kids.flat(9)) if (k != null && k !== false) el.append(k instanceof Node ? k : String(k));
+  return el;
+}
+async function api(method, path, body) {
+  const opt = {method, headers: {'X-Token': TOKEN}};
+  if (body instanceof FormData) opt.body = body;
+  else if (body !== undefined) { opt.body = JSON.stringify(body); opt.headers['Content-Type'] = 'application/json'; }
+  const r = await fetch(path, opt);
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || r.statusText);
+  return j;
+}
+function toast(msg, err) {
+  const d = h('div', {class: err ? 'err' : ''}, msg);
+  document.getElementById('toast').append(d);
+  setTimeout(() => d.remove(), err ? 6000 : 2600);
+}
+const fmt = s => { const n = s < 0; s = Math.abs(s); return (n ? '-' : '') + Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); };
+const clone = o => JSON.parse(JSON.stringify(o));
+const busName = {both: 'войс + вы', voice: 'только войс', monitor: 'только вы'};
+
+// изменение конфига: mut(c) → сохранить → перерисовать
+let saveTimer = null, pendingCfg = null, lastSave = 0;
+function edit(mut, {debounce = 0, rerender = true} = {}) {
+  pendingCfg = pendingCfg || clone(S.config);
+  mut(pendingCfg);
+  if (!pendingCfg.sounds) pendingCfg.sounds = {};
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(async () => {
+    const c = pendingCfg; pendingCfg = null; lastSave = Date.now();
+    try { S = await api('PUT', '/api/config', c); if (rerender) render(); }
+    catch (e) { toast('Не сохранено: ' + e.message, true); await load(); }
+  }, debounce);
+}
+async function load() { S = await api('GET', '/api/state'); ST = S.status; render(); }
+
+function hotkeysFor(action) {
+  return Object.entries(S.config.hotkeys || {}).filter(([, a]) => a === action || a.startsWith(action + '@')).map(([k]) => k);
+}
+const kbd = keys => keys.map(k => h('span', {class: 'kbd'}, k));
+
+// ---------- захват клавиши ----------
+const codeMap = {Backquote: 'Tilde', Space: 'Space', Tab: 'Tab', Enter: 'Enter', Escape: 'Esc', Backspace: 'Backspace',
+  Insert: 'Insert', Delete: 'Delete', Home: 'Home', End: 'End', PageUp: 'PageUp', PageDown: 'PageDown', Pause: 'Pause',
+  ScrollLock: 'ScrollLock', CapsLock: 'CapsLock', ArrowUp: 'Up', ArrowDown: 'Down', ArrowLeft: 'Left', ArrowRight: 'Right',
+  NumpadAdd: 'NumAdd', NumpadSubtract: 'NumSub', NumpadMultiply: 'NumMul', NumpadDivide: 'NumDiv', NumpadDecimal: 'NumDot',
+  ShiftLeft: 'LShift', ShiftRight: 'RShift', ControlLeft: 'LCtrl', ControlRight: 'RCtrl', AltLeft: 'LAlt', AltRight: 'RAlt'};
+function keyName(e) {
+  const c = e.code;
+  if (/^Key[A-Z]$/.test(c)) return c.slice(3);
+  if (/^Digit\d$/.test(c)) return c.slice(5);
+  if (/^Numpad\d$/.test(c)) return 'Num' + c.slice(6);
+  if (/^F\d+$/.test(c)) return c;
+  return codeMap[c] || null;
+}
+// single=true — одна клавиша без модификаторов (для PTT, можно Mouse4/5 и Shift/Ctrl)
+function captureKey(title, single) {
+  return new Promise(resolve => {
+    api('POST', '/api/hotkeys/pause', {on: true}).catch(() => {});
+    const modal = document.getElementById('modal'), body = document.getElementById('modalBody');
+    const show = h('div', {class: 'capture'}, '…');
+    body.replaceChildren(h('h3', {}, title), h('p', {class: 'mute'}, single ? 'Нажмите клавишу или боковую кнопку мыши' : 'Нажмите сочетание (например Num1, F9, Ctrl+Alt+S)'), show,
+      h('div', {class: 'row', style: 'justify-content:center'}, h('button', {onclick: () => done(null)}, 'Отмена')));
+    modal.classList.remove('hidden');
+    function done(v) {
+      window.removeEventListener('keydown', kd, true); window.removeEventListener('mousedown', md, true);
+      modal.classList.add('hidden');
+      api('POST', '/api/hotkeys/pause', {on: false}).catch(() => {});
+      resolve(v);
+    }
+    function kd(e) {
+      e.preventDefault(); e.stopPropagation();
+      if (e.code === 'Escape') return done(null);
+      const k = keyName(e);
+      if (!k) return;
+      if (single) return done(k);
+      if (/Shift|Ctrl|Alt/.test(k)) { show.textContent = [e.ctrlKey && 'Ctrl', e.altKey && 'Alt', e.shiftKey && 'Shift'].filter(Boolean).join('+') + '+…'; return; }
+      const combo = [e.ctrlKey && 'Ctrl', e.altKey && 'Alt', e.shiftKey && 'Shift', e.metaKey && 'Win', k].filter(Boolean).join('+');
+      show.textContent = combo; setTimeout(() => done(combo), 250);
+    }
+    function md(e) {
+      if (!single) return;
+      if (e.button === 3) { e.preventDefault(); done('Mouse4'); }
+      if (e.button === 4) { e.preventDefault(); done('Mouse5'); }
+      if (e.button === 1) { e.preventDefault(); done('Mouse3'); }
+    }
+    window.addEventListener('keydown', kd, true); window.addEventListener('mousedown', md, true);
+  });
+}
+function bindHotkey(action, combo) {
+  const prev = S.config.hotkeys[combo];
+  if (prev && prev !== action && !confirm(`${combo} уже назначена на «${prev}». Заменить?`)) return;
+  edit(c => {
+    for (const [k, a] of Object.entries(c.hotkeys)) if (a === action) delete c.hotkeys[k];
+    c.hotkeys[combo] = action;
+  });
+  toast(`${combo} → ${action}`);
+}
+
+// ---------- шапка ----------
+function renderPills() {
+  if (!ST) return;
+  const a = ST.audio, g = ST.game;
+  const pills = [
+    h('span', {class: 'pill ' + (a.running ? 'ok' : 'bad')}, a.running ? '🔊 Аудио работает' : '🔇 Аудио: ' + (a.error ? 'ошибка' : 'не запущено')),
+    h('span', {class: 'pill ' + (g.connected ? 'ok' : '')}, g.connected ? `🎮 Dota ${g.has_clock ? fmt(g.clock) : ''}${g.paused ? ' ⏸' : ''}` : '🎮 Dota не подключена'),
+    h('span', {class: 'pill ' + (ST.ptt_key ? '' : 'warn')}, '⌨️ PTT: ' + (ST.ptt_key || 'не задана')),
+    h('span', {class: 'pill'}, '🎙 ' + ST.preset),
+  ];
+  if (ST.ptt_held) pills.push(h('span', {class: 'pill live'}, '● В ЭФИРЕ'));
+  if (ST.mic_monitor) pills.push(h('span', {class: 'pill warn'}, '🎧 Слышу себя'));
+  document.getElementById('pills').replaceChildren(...pills);
+}
+
+// ---------- страницы ----------
+const pages = {};
+
+pages.home = () => {
+  const c = S.config;
+  const presetBtns = S.presets.map(p => h('button', {class: 'tile' + (ST.preset === p.name ? ' on' : ''), onclick: () => api('POST', '/api/action', {action: 'preset:' + p.name})},
+    h('b', {}, p.name), h('small', {}, p.desc || 'свой пресет'), ...kbd(hotkeysFor('preset:' + p.name))));
+  const rank = s => (hotkeysFor('sound:' + s.id).length ? 0 : 2) + (s.label ? 0 : 1);
+  const quick = S.sounds.filter(s => hotkeysFor('sound:' + s.id).length || s.label || s.source !== 'builtin').sort((a, b) => rank(a) - rank(b));
+  const soundBtns = quick.map(s => h('button', {class: 'tile', onclick: () => api('POST', '/api/action', {action: 'sound:' + s.id})},
+    h('b', {}, s.label || s.id), h('small', {}, busName[s.bus] + ' · ' + s.duration + ' с'), ...kbd(hotkeysFor('sound:' + s.id))));
+  const slider = (label, key, min, max, step) => h('div', {class: 'sl'}, h('span', {}, label),
+    h('input', {type: 'range', min, max, step, value: c[key], oninput: e => { e.target.nextSibling.textContent = (+e.target.value).toFixed(2); edit(x => x[key] = +e.target.value, {debounce: 300, rerender: false}); }}),
+    h('span', {class: 'mute'}, (+c[key]).toFixed(2)));
+  return h('div', {class: 'grid'},
+    h('div', {class: 'card'}, h('h3', {}, 'Голос'), h('div', {class: 'btns'}, presetBtns),
+      h('div', {class: 'row', style: 'margin-top:12px'},
+        h('button', {class: ST.mic_monitor ? 'on' : '', onclick: () => api('POST', '/api/action', {action: 'mic_monitor'})}, '🎧 Слышать себя'),
+        h('span', {class: 'mute'}, 'включите, чтобы подобрать пресет'))),
+    h('div', {class: 'card'}, h('h3', {}, 'Игра'), h('div', {id: 'game'}), h('div', {class: 'row', style: 'margin-top:10px'},
+      h('button', {onclick: () => api('POST', '/api/action', {action: 'rosh'})}, '🐉 Рошан убит'), ...kbd(hotkeysFor('rosh')))),
+    h('div', {class: 'card'}, h('h3', {}, 'Звуки'), h('div', {class: 'btns'}, soundBtns.length ? soundBtns : h('span', {class: 'mute'}, 'Добавьте звуки во вкладке «Звуки»')),
+      h('div', {class: 'row', style: 'margin-top:12px'}, h('button', {onclick: () => api('POST', '/api/action', {action: 'stop'})}, '⏹ Стоп всё'), ...kbd(hotkeysFor('stop')))),
+    h('div', {class: 'card'}, h('h3', {}, 'Уровни и громкость'),
+      ['mic_in:🎤 Микрофон', 'voice_out:📡 В войс', 'monitor:🎧 В наушники'].map(x => { const [k, l] = x.split(':');
+        return h('div', {class: 'sl'}, h('span', {}, l), h('div', {class: 'meter'}, h('i', {id: 'm_' + k})), h('span', {})); }),
+      slider('Усиление микрофона', 'mic_gain', 0, 3, 0.05),
+      slider('Голос во время звука', 'ducking', 0, 1, 0.05),
+      slider('Громкость звуков', 'sfx_volume', 0, 2, 0.05),
+      slider('Громкость в наушниках', 'monitor_volume', 0, 1.5, 0.05)));
+};
+
+function renderGame() {
+  const el = document.getElementById('game'); if (!el || !ST) return;
+  const g = ST.game;
+  if (!g.connected) { el.replaceChildren(h('div', {class: 'clock mute'}, '--:--'), h('p', {class: 'mute'}, 'Запустите Dota 2. Если игра уже запущена — проверьте вкладку «Настройка».')); return; }
+  const up = (ST.upcoming || []).slice(0, 6).map(u => [h('span', {}, (u.label || u.id) + ' ', h('span', {class: 'mute'}, 'в ' + fmt(u.event_at))), h('b', {style: 'text-align:right'}, fmt(u.in)),
+    h('div', {class: 'bar'}, h('i', {style: `width:${Math.max(0, 100 - u.in / 1.2)}%`}))]);
+  el.replaceChildren(h('div', {class: 'clock'}, g.has_clock ? fmt(g.clock) : '--:--', g.paused ? ' ⏸' : ''),
+    h('div', {class: 'mute'}, [g.hero && ('Герой: ' + g.hero), g.daytime ? '☀️ день' : '🌙 ночь', (g.state || '').toLowerCase().replaceAll('_', ' ')].filter(Boolean).join(' · ')),
+    up.length ? h('div', {class: 'up'}, up) : h('p', {class: 'mute'}, 'Таймеры появятся, когда начнётся матч'));
+}
+
+function soundSelect(value, onchange, allowEmpty) {
+  return h('select', {onchange: e => onchange(e.target.value)},
+    allowEmpty && h('option', {value: ''}, '— нет —'),
+    S.sounds.map(s => h('option', {value: s.id, selected: (value || '').split('@')[0] === s.id}, s.label ? `${s.label} (${s.id})` : s.id)));
+}
+function ensureDef(c, s) {
+  if (!c.sounds[s.id]) c.sounds[s.id] = {files: s.files, bus: s.bus, volume: s.volume, cooldown: s.cooldown, mode: s.mode};
+  return c.sounds[s.id];
+}
+
+pages.sounds = () => {
+  const drop = h('div', {class: 'drop', onclick: () => fileIn.click()}, '📁 Перетащите сюда .mp3 / .wav или нажмите, чтобы выбрать файлы');
+  const fileIn = h('input', {type: 'file', multiple: true, accept: '.mp3,.wav', class: 'hidden', onchange: e => upload(e.target.files)});
+  drop.addEventListener('dragover', e => { e.preventDefault(); drop.classList.add('over'); });
+  drop.addEventListener('dragleave', () => drop.classList.remove('over'));
+  drop.addEventListener('drop', e => { e.preventDefault(); drop.classList.remove('over'); upload(e.dataTransfer.files); });
+  async function upload(files) {
+    const fd = new FormData(); for (const f of files) fd.append('files', f);
+    try { const r = await api('POST', '/api/sounds', fd); S = r.state; render(); toast('Добавлено: ' + r.saved.join(', ')); }
+    catch (e) { toast(e.message, true); }
+  }
+  const ttsId = h('input', {placeholder: 'id, например mid_miss'}), ttsText = h('input', {placeholder: 'Текст: «Мид пропал!»', style: 'flex:1'});
+  const rows = S.sounds.map(s => h('tr', {},
+    h('td', {}, h('b', {}, s.label || s.id), h('br'), h('small', {class: 'mute'}, s.id + ' · ' + {builtin: 'встроенный', file: 'файл', config: (s.files[0] || '').startsWith('tts:') ? 'озвучка' : 'конфиг'}[s.source] + ' · ' + s.duration + ' с')),
+    h('td', {}, h('select', {onchange: e => edit(c => ensureDef(c, s).bus = e.target.value)}, Object.entries(busName).map(([v, l]) => h('option', {value: v, selected: s.bus === v}, l)))),
+    h('td', {style: 'width:120px'}, h('input', {type: 'range', min: 0, max: 2, step: 0.05, value: s.volume, title: 'Громкость', onchange: e => edit(c => ensureDef(c, s).volume = +e.target.value)})),
+    h('td', {}, h('input', {type: 'number', min: 0, step: 1, value: s.cooldown, title: 'Кулдаун, с', onchange: e => edit(c => ensureDef(c, s).cooldown = +e.target.value)})),
+    h('td', {}, h('select', {onchange: e => edit(c => ensureDef(c, s).mode = e.target.value)}, [['', 'наложение'], ['interrupt', 'перезапуск'], ['ignore', 'не повторять']].map(([v, l]) => h('option', {value: v, selected: (s.mode || '') === v}, l)))),
+    h('td', {}, kbd(hotkeysFor('sound:' + s.id)), ' ', h('button', {class: 'small', onclick: async () => { const k = await captureKey('Клавиша для «' + (s.label || s.id) + '»'); if (k) bindHotkey('sound:' + s.id, k); }}, '⌨️')),
+    h('td', {style: 'white-space:nowrap'},
+      h('button', {class: 'small', title: 'Прослушать (только вам)', onclick: () => api('POST', '/api/action', {action: `sound:${s.id}@monitor`})}, '▶'), ' ',
+      h('button', {class: 'small', title: 'В войс', onclick: () => api('POST', '/api/action', {action: `sound:${s.id}@both`})}, '📢'), ' ',
+      s.source !== 'builtin' && h('button', {class: 'small danger', title: 'Удалить', onclick: async () => { if (!confirm('Удалить ' + s.id + '?')) return; try { S = await api('POST', '/api/sounds/delete', {id: s.id}); render(); } catch (e) { toast(e.message, true); } }}, '🗑'))));
+  return h('div', {},
+    h('div', {class: 'flex'},
+      h('div', {class: 'card'}, h('h3', {}, 'Добавить файлы'), drop, fileIn,
+        h('div', {class: 'row', style: 'margin-top:10px'}, h('button', {onclick: () => api('POST', '/api/open', {what: 'sounds'})}, '📂 Открыть папку звуков'),
+          h('label', {class: 'sw'}, h('input', {type: 'checkbox', checked: S.config.normalize_sounds, onchange: e => edit(c => c.normalize_sounds = e.target.checked)}), 'Выравнивать громкость'))),
+      h('div', {class: 'card'}, h('h3', {}, 'Озвучка текста (Windows TTS)'), h('div', {class: 'row'}, ttsId, ttsText),
+        h('div', {class: 'row', style: 'margin-top:10px'}, h('button', {class: 'primary', onclick: () => {
+          const id = ttsId.value.trim().replace(/\s+/g, '_'); const t = ttsText.value.trim();
+          if (!id || !t) return toast('Укажите id и текст', true);
+          edit(c => c.sounds[id] = {label: t, files: ['tts:' + t], bus: 'both', cooldown: 3}); toast('Создано: ' + id);
+        }}, '＋ Создать'), h('span', {class: 'mute'}, 'русский голос, если он установлен в Windows')))),
+    h('div', {class: 'card', style: 'margin-top:16px'}, h('table', {},
+      h('tr', {}, ['Звук', 'Куда', 'Громкость', 'Кулдаун', 'Повтор', 'Клавиша', ''].map(t => h('th', {}, t))), rows)));
+};
+
+pages.timers = () => {
+  const c = S.config;
+  const rows = (c.timers || []).map((t, i) => h('tr', {},
+    h('td', {}, h('label', {class: 'sw'}, h('input', {type: 'checkbox', checked: !t.disabled, onchange: e => edit(x => x.timers[i].disabled = !e.target.checked)}))),
+    h('td', {}, h('input', {value: t.label || t.id, onchange: e => edit(x => x.timers[i].label = e.target.value)})),
+    h('td', {}, h('input', {value: (t.at || []).map(fmt).join(', '), placeholder: '6:00, 12:00', style: 'width:110px', title: 'Разовые моменты',
+      onchange: e => edit(x => x.timers[i].at = e.target.value.split(',').map(v => v.trim()).filter(Boolean).map(parseClock))})),
+    h('td', {}, h('input', {value: t.every ? fmt(t.start || 0) : '', placeholder: '7:00', style: 'width:70px', onchange: e => edit(x => x.timers[i].start = parseClock(e.target.value || '0'))}), ' каждые ',
+      h('input', {value: t.every ? fmt(t.every) : '', placeholder: '7:00', style: 'width:70px', onchange: e => edit(x => x.timers[i].every = parseClock(e.target.value || '0'))})),
+    h('td', {}, 'за ', h('input', {type: 'number', value: t.warn_before || 0, onchange: e => edit(x => x.timers[i].warn_before = +e.target.value)}), ' с'),
+    h('td', {}, soundSelect(t.sound, v => edit(x => x.timers[i].sound = v))),
+    h('td', {}, h('button', {class: 'small', onclick: () => api('POST', '/api/action', {action: 'sound:' + t.sound})}, '▶'), ' ',
+      h('button', {class: 'small danger', onclick: () => edit(x => x.timers.splice(i, 1))}, '🗑'))));
+  const evRows = S.events.map(ev => h('tr', {}, h('td', {}, ev.label), h('td', {},
+    soundSelect((c.events || {})[ev.id], v => edit(x => { x.events = x.events || {}; if (v) x.events[ev.id] = v; else delete x.events[ev.id]; }), true))));
+  return h('div', {},
+    h('div', {class: 'hint'}, 'Время — по игровым часам Dota 2 (пауза учитывается). Интервалы рун меняются от патча к патчу — правьте здесь.'),
+    h('div', {class: 'card'}, h('h3', {}, 'Таймеры'), h('table', {},
+      h('tr', {}, ['', 'Название', 'Разово', 'Повтор', 'Предупредить', 'Звук', ''].map(t => h('th', {}, t))), rows),
+      h('button', {style: 'margin-top:10px', onclick: () => edit(x => (x.timers = x.timers || []).push({id: 'timer_' + Date.now(), label: 'Новый таймер', sound: 'beep', at: [600], warn_before: 10}))}, '＋ Добавить таймер')),
+    h('div', {class: 'flex', style: 'margin-top:16px'},
+      h('div', {class: 'card'}, h('h3', {}, 'События игры → звук'), h('table', {}, evRows)),
+      h('div', {class: 'card'}, h('h3', {}, 'Рошан'), h('p', {class: 'mute'}, 'Нажмите «Рошан убит» (или клавишу) — программа отсчитает аегис 5:00 и окно респауна 8:00–11:00.'),
+        h('div', {class: 'sl'}, 'Звук', soundSelect(c.rosh.sound, v => edit(x => x.rosh.sound = v)), ''),
+        h('div', {class: 'sl'}, 'Аегис: предупредить за', h('input', {type: 'number', value: c.rosh.aegis_warn, onchange: e => edit(x => x.rosh.aegis_warn = +e.target.value)}), 'с'),
+        h('div', {class: 'sl'}, 'Респаун: предупредить за', h('input', {type: 'number', value: c.rosh.min_warn, onchange: e => edit(x => x.rosh.min_warn = +e.target.value)}), 'с'))));
+};
+function parseClock(v) { v = String(v).trim(); if (v.includes(':')) { const n = v.startsWith('-'); const [m, s] = v.replace('-', '').split(':').map(Number); return (n ? -1 : 1) * (m * 60 + (s || 0)); } return +v || 0; }
+
+const effectHelp = 'gain{db} · lowpass/highpass/bandpass{freq,q} · peaking/lowshelf/highshelf{freq,q,db} · drive{amount,mode:soft|hard|fold} · bitcrush{bits,downsample} · compressor{threshold_db,ratio,attack_ms,release_ms,makeup_db} · gate{threshold_db,hang_ms} · squelch{threshold_db,click_db,static_db,tail_ms,tail_db} · noise{db,kind:white|crackle} · dropout{chance,len_ms} · ringmod{freq,mix} · limiter{threshold_db}';
+let editing = null;
+pages.voice = () => {
+  if (!editing) { const cur = S.presets.find(p => p.name === ST.preset); if (cur) editing = {name: cur.name, text: JSON.stringify(cur.specs, null, 2), builtin: cur.builtin}; }
+  const list = S.presets.map(p => h('button', {class: 'tile' + (ST.preset === p.name ? ' on' : '') + (editing && editing.name === p.name ? ' on' : ''), onclick: () => { editing = {name: p.name, text: JSON.stringify(p.specs, null, 2), builtin: p.builtin}; api('POST', '/api/action', {action: 'preset:' + p.name}); render(); }},
+    h('b', {}, p.name), h('small', {}, (p.builtin ? '' : '✎ ') + (p.desc || 'свой пресет')), ...kbd(hotkeysFor('preset:' + p.name))));
+  let editor = h('p', {class: 'mute'}, 'Выберите пресет, чтобы включить его и открыть в редакторе.');
+  if (editing) {
+    const name = h('input', {value: editing.builtin ? editing.name + '_my' : editing.name});
+    const ta = h('textarea', {value: editing.text, oninput: e => editing.text = e.target.value});
+    const parse = () => { try { return JSON.parse(ta.value); } catch (e) { toast('Ошибка JSON: ' + e.message, true); return null; } };
+    editor = h('div', {},
+      h('div', {class: 'row'}, 'Имя:', name, h('button', {class: 'small', onclick: async () => { const k = await captureKey('Клавиша для пресета'); if (k) bindHotkey('preset:' + name.value, k); }}, '⌨️ клавиша')),
+      h('p', {class: 'mute', style: 'font-size:12px'}, effectHelp), ta,
+      h('div', {class: 'row', style: 'margin-top:10px'},
+        h('button', {onclick: async () => { const sp = parse(); if (!sp) return; try { await api('POST', '/api/preset/test', {name: name.value, specs: sp}); toast('Применено на лету (не сохранено). Включите «Слышать себя».'); } catch (e) { toast(e.message, true); } }}, '🎧 Попробовать'),
+        h('button', {class: 'primary', onclick: () => { const sp = parse(); if (!sp) return; const n = name.value.trim(); edit(c => { c.voice_presets = c.voice_presets || {}; c.voice_presets[n] = sp; }); editing = {name: n, text: ta.value, builtin: false}; api('POST', '/api/action', {action: 'preset:' + n}); toast('Сохранено: ' + n); }}, '💾 Сохранить'),
+        !editing.builtin && (S.config.voice_presets || {})[editing.name] && h('button', {class: 'danger', onclick: () => { const n = editing.name; editing = null; edit(c => delete c.voice_presets[n]); api('POST', '/api/action', {action: 'preset:clean'}); }}, '🗑 Удалить / сбросить'),
+        h('button', {class: ST.mic_monitor ? 'on' : '', onclick: () => api('POST', '/api/action', {action: 'mic_monitor'})}, '🎧 Слышать себя')));
+  }
+  return h('div', {class: 'flex'},
+    h('div', {class: 'card', style: 'max-width:420px'}, h('h3', {}, 'Пресеты'), h('div', {class: 'btns'}, list),
+      h('label', {class: 'sw', style: 'margin-top:12px'}, h('input', {type: 'checkbox', checked: S.config.fx_on_sounds, onchange: e => edit(c => c.fx_on_sounds = e.target.checked)}), 'Пропускать звуки через пресет (сирена «по рации»)'),
+      h('div', {class: 'sl'}, 'Пресет при запуске', h('select', {onchange: e => edit(c => c.start_preset = e.target.value)}, S.presets.map(p => h('option', {value: p.name, selected: S.config.start_preset === p.name}, p.name))), '')),
+    h('div', {class: 'card'}, h('h3', {}, 'Редактор пресета'), editor));
+};
+
+function actionOptions(sel) {
+  const opts = [['Звуки', S.sounds.flatMap(s => [['sound:' + s.id, '🔊 ' + (s.label || s.id)], ['sound:' + s.id + '@monitor', '🎧 ' + (s.label || s.id) + ' (только мне)']])],
+    ['Голос', [...S.presets.map(p => ['preset:' + p.name, '🎙 ' + p.name]), ['preset:next', '🎙 следующий пресет'], ['preset:prev', '🎙 предыдущий пресет']]],
+    ['Прочее', [['rosh', '🐉 Рошан убит'], ['stop', '⏹ стоп всё'], ['mic_monitor', '🎧 слышать себя'], ['reload', '🔄 перечитать конфиг'], ['ui', '🪟 открыть окно']]]];
+  return opts.map(([g, items]) => h('optgroup', {label: g}, items.map(([v, l]) => h('option', {value: v, selected: v === sel}, l))));
+}
+pages.keys = () => {
+  const hk = S.config.hotkeys || {};
+  const rows = Object.keys(hk).sort().map(k => h('tr', {},
+    h('td', {}, h('span', {class: 'kbd'}, k)),
+    h('td', {}, h('select', {onchange: e => edit(c => c.hotkeys[k] = e.target.value)}, actionOptions(hk[k]))),
+    h('td', {}, h('button', {class: 'small', onclick: async () => { const n = await captureKey('Новая клавиша вместо ' + k); if (n) edit(c => { const a = c.hotkeys[k]; delete c.hotkeys[k]; c.hotkeys[n] = a; }); }}, 'изменить'), ' ',
+      h('button', {class: 'small danger', onclick: () => edit(c => delete c.hotkeys[k])}, '🗑'))));
+  const newAct = h('select', {}, actionOptions('sound:siren'));
+  return h('div', {class: 'card'}, h('h3', {}, 'Горячие клавиши'),
+    h('div', {class: 'hint'}, 'Клавиши глобальные — работают поверх Dota 2. Не используйте клавиши, нужные в игре (QWERDF, ZXCVBN и т.п.). Numpad и F-клавиши — хороший выбор.'),
+    h('table', {}, h('tr', {}, h('th', {}, 'Клавиша'), h('th', {}, 'Действие'), h('th', {}, '')), rows),
+    h('div', {class: 'row', style: 'margin-top:12px'}, newAct, h('button', {class: 'primary', onclick: async () => { const k = await captureKey('Клавиша для действия'); if (k) bindHotkey(newAct.value, k); }}, '＋ Назначить клавишу')));
+};
+
+let SETUP = null;
+async function loadSetup() { try { SETUP = await api('GET', '/api/setup'); } catch (e) { toast(e.message, true); } if (page === 'setup') render(); updateBadge(); }
+function updateBadge() { document.getElementById('setupBadge').classList.toggle('hidden', !SETUP || SETUP.all_ok); }
+async function fix(id) {
+  if (id === 'launch' && SETUP.checks.find(c => c.id === 'launch').detail.includes('перезапущен') && !confirm('Steam будет закрыт и запущен заново. Продолжить?')) return;
+  try { toast('Выполняю…'); SETUP = await api('POST', '/api/setup/fix', {id}); toast('Готово'); } catch (e) { toast(e.message, true); }
+  await load(); loadSetup();
+}
+pages.setup = () => {
+  const c = S.config;
+  if (!SETUP) { loadSetup(); return h('p', {class: 'mute'}, 'Проверяю…'); }
+  const checks = SETUP.checks.map(ch => h('div', {class: 'check'}, h('span', {class: 'ic'}, ch.ok ? '✅' : (ch.fix ? '⚠️' : (ch.id === 'gsi_live' ? '⏳' : '❌'))),
+    h('div', {}, h('b', {}, ch.title), h('small', {}, ch.detail), ch.manual && h('small', {class: 'warn'}, ch.manual)),
+    ch.fix && !ch.ok ? h('button', {class: 'primary small', onclick: () => fix(ch.fix)}, ch.fix_label) : h('span')));
+  const devSel = (key, list, autoLabel) => h('select', {onchange: e => edit(x => x.devices[key] = e.target.value)},
+    h('option', {value: ''}, autoLabel), (list || []).map(d => h('option', {value: d.name, selected: c.devices[key] === d.name}, d.name + (d.is_default ? ' (по умолчанию)' : ''))));
+  const num = (label, get, set, unit) => h('div', {class: 'sl'}, label, h('input', {type: 'number', value: get(), onchange: e => edit(x => set(x, +e.target.value))}), unit);
+  return h('div', {class: 'flex'},
+    h('div', {class: 'card'}, h('h3', {}, 'Проверка и автонастройка'),
+      SETUP.busy && h('div', {class: 'hint'}, '⏳ ' + SETUP.busy),
+      checks,
+      h('div', {class: 'row', style: 'margin-top:14px'},
+        h('button', {class: 'primary', onclick: async () => { try { const r = await api('POST', '/api/setup/auto', {allow_steam_restart: confirm('Разрешить перезапуск Steam, если нужно добавить параметр запуска?')}); SETUP = r.setup; r.report.forEach(x => toast(x)); await load(); } catch (e) { toast(e.message, true); } }}, '✨ Настроить всё автоматически'),
+        h('button', {onclick: loadSetup}, '🔄 Проверить снова'))),
+    h('div', {class: 'card'}, h('h3', {}, 'Устройства'),
+      h('div', {class: 'sl'}, 'Микрофон', devSel('mic', (S.devices.capture || []).filter(d => !/cable output|voicemeeter out/i.test(d.name)), 'Авто (по умолчанию)'), ''),
+      h('div', {class: 'sl'}, 'Виртуальный кабель', devSel('voice_out', S.devices.playback, 'Авто (найти кабель)'), ''),
+      h('div', {class: 'sl'}, 'Наушники', devSel('monitor', (S.devices.playback || []).filter(d => !/cable input|voicemeeter/i.test(d.name)), 'Авто (по умолчанию)'), ''),
+      S.devices.error && h('p', {class: 'bad'}, S.devices.error),
+      h('h3', {style: 'margin-top:18px'}, 'Голосовой чат Dota 2'),
+      h('div', {class: 'row'}, 'Кнопка:', h('span', {class: 'kbd'}, c.ptt.key || 'не задана'),
+        h('button', {class: 'small', onclick: async () => { const k = await captureKey('Нажмите кнопку голосового чата из Dota 2', true); if (k) edit(x => x.ptt.key = k); }}, 'Назначить'),
+        h('button', {class: 'small', onclick: () => fix('ptt')}, 'Взять из Dota 2')),
+      h('label', {class: 'sw'}, h('input', {type: 'checkbox', checked: c.ptt.auto_detect, onchange: e => edit(x => x.ptt.auto_detect = e.target.checked)}), 'Следить за биндом в Dota 2 и обновлять автоматически'),
+      h('label', {class: 'sw'}, h('input', {type: 'checkbox', checked: c.ptt.auto, onchange: e => edit(x => x.ptt.auto = e.target.checked)}), 'Зажимать кнопку, пока играет звук'),
+      num('Задержка перед звуком', () => c.ptt.lead_ms, (x, v) => x.ptt.lead_ms = v, 'мс'),
+      num('Держать после звука', () => c.ptt.tail_ms, (x, v) => x.ptt.tail_ms = v, 'мс'),
+      h('h3', {style: 'margin-top:18px'}, 'Программа'),
+      h('label', {class: 'sw'}, h('input', {type: 'checkbox', checked: SETUP.autostart, onchange: async e => { try { await api('POST', '/api/setup/autostart', {on: e.target.checked}); loadSetup(); } catch (er) { toast(er.message, true); } }}), 'Запускать вместе с Windows (в фоне)'),
+      h('label', {class: 'sw'}, h('input', {type: 'checkbox', checked: c.ui.keep_running_on_close, onchange: e => edit(x => x.ui.keep_running_on_close = e.target.checked)}), 'Работать в фоне после закрытия окна (открыть снова — запуском exe или клавишей «открыть окно»)'),
+      num('Мало HP, порог', () => c.gsi.low_hp_percent, (x, v) => x.gsi.low_hp_percent = v, '%'),
+      h('div', {class: 'row', style: 'margin-top:10px'},
+        h('button', {onclick: () => api('POST', '/api/open', {what: 'config'})}, '📂 Папка программы'),
+        h('button', {onclick: () => api('POST', '/api/open', {what: 'repo'})}, 'GitHub'))));
+};
+
+pages.log = () => {
+  const el = h('div', {id: 'log'}, (S.logs || []).join('\n'));
+  setTimeout(() => el.scrollTop = el.scrollHeight);
+  return h('div', {}, h('h2', {}, 'Журнал'), el);
+};
+
+// ---------- рендер ----------
+function render() {
+  if (!S) return;
+  document.getElementById('ver').textContent = S.version;
+  const el = document.getElementById('page');
+  const scroll = el.scrollTop;
+  el.replaceChildren(pages[page]());
+  el.scrollTop = scroll;
+  renderPills(); renderGame();
+}
+document.querySelectorAll('#nav button[data-page]').forEach(b => b.addEventListener('click', () => {
+  document.querySelectorAll('#nav button').forEach(x => x.classList.remove('active'));
+  b.classList.add('active'); page = b.dataset.page; history.replaceState(null, '', '#' + page);
+  if (page === 'setup') loadSetup();
+  render();
+}));
+document.getElementById('quitBtn').addEventListener('click', () => { if (confirm('Закрыть VoiceBox? Звуки и голосовые пресеты перестанут работать.')) api('POST', '/api/quit'); });
+
+// ---------- живые данные ----------
+function connectEvents() {
+  const es = new EventSource('/api/events?t=' + encodeURIComponent(TOKEN));
+  es.addEventListener('levels', e => {
+    LV = JSON.parse(e.data);
+    for (const k in peaks) {
+      peaks[k] = Math.max(LV[k], peaks[k] * 0.85);
+      const m = document.getElementById('m_' + k);
+      if (m) m.style.width = Math.min(100, Math.sqrt(peaks[k]) * 100) + '%';
+    }
+  });
+  es.addEventListener('status', e => {
+    const prev = ST; ST = JSON.parse(e.data);
+    renderPills(); renderGame();
+    if (prev && (prev.preset !== ST.preset || prev.mic_monitor !== ST.mic_monitor) && (page === 'home' || page === 'voice')) render();
+  });
+  es.addEventListener('log', e => {
+    const line = JSON.parse(e.data);
+    S && S.logs.push(line);
+    const el = document.getElementById('log');
+    if (el) { const atEnd = el.scrollTop + el.clientHeight >= el.scrollHeight - 30; el.append('\n' + line); if (atEnd) el.scrollTop = el.scrollHeight; }
+    if (/Обнаружены изменения|Кнопка голосового чата|VB-Cable установлен/.test(line) && Date.now() - lastSave > 3000 && !pendingCfg) clearTimeout(window._rl), window._rl = setTimeout(() => !document.querySelector('#modal:not(.hidden)') && load(), 600);
+  });
+  es.onerror = () => { document.getElementById('pills').replaceChildren(h('span', {class: 'pill bad'}, 'Нет связи с программой…')); };
+}
+function go(p) { const b = document.querySelector(`[data-page=${p}]`); if (b) b.click(); }
+load().then(() => { connectEvents(); loadSetup(); const hp = location.hash.slice(1); if (hp) go(hp); else if (!S.config.setup_done) go('setup'); })
+  .catch(e => document.getElementById('page').replaceChildren(h('p', {class: 'bad'}, 'Ошибка: ' + e.message)));

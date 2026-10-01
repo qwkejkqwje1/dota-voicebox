@@ -1,8 +1,9 @@
 // Package app связывает всё вместе: горячие клавиши → действия, GSI → события/таймеры,
-// автонажатие PTT, пресеты голоса и горячая перезагрузка конфига.
+// автонажатие PTT, пресеты голоса, автонастройка и горячая перезагрузка конфига.
 package app
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -29,51 +30,101 @@ type Output interface {
 	Monitor() *audio.Mixer
 	SetChain(*dsp.Chain)
 	ToggleMicMonitor() bool
+	MicMonitor() bool
+	Running() bool
+	Start(audio.Options) error
+	SetMix(micGain, ducking, sfxVol, monVol float64, fxOnSounds bool)
+	Status() audio.Status
 }
 
 type App struct {
 	ConfigPath string
 	BaseDir    string
+	Version    string
 
 	mu      sync.Mutex
 	cfg     *config.Config
 	lib     *sounds.Library
 	out     Output
 	hk      *winapi.Hotkeys
+	combos  []keys.Combo
 	timers  *timers.Engine
 	presets map[string][]dsp.Spec
 	order   []string
 	preset  string
-	actions map[string]string // текст комбинации → действие
+	actions map[string]string
 	pttVK   uint32
+	devOpts *audio.Options
 
+	gsiMu     sync.Mutex
 	prevState *gsi.State
-	gsiSeen   bool
+	lastGSI   time.Time
 
 	pttOwned  atomic.Bool
 	pending   atomic.Int32
 	lastVoice atomic.Int64
 	stamp     string
-	tts       sounds.TTSFunc
+	hkPaused  atomic.Bool
+
+	// OnShowUI — вызывается действием "ui" (открыть окно).
+	OnShowUI func()
 }
 
 func New(configPath string, out Output) *App {
-	base := filepath.Dir(configPath)
-	return &App{
-		ConfigPath: configPath, BaseDir: base, out: out,
-		timers: timers.New(nil),
-		tts:    winapi.NewTTS(filepath.Join(base, "cache"), 1),
-	}
+	return &App{ConfigPath: configPath, BaseDir: filepath.Dir(configPath), out: out, timers: timers.New(nil)}
 }
 
-// Reload (пере)читывает конфиг, звуки, пресеты, таймеры и горячие клавиши.
+// Config возвращает копию текущего конфига.
+func (a *App) Config() *config.Config {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	b, _ := json.Marshal(a.cfg)
+	var c config.Config
+	json.Unmarshal(b, &c)
+	return &c
+}
+
+// SaveConfig сохраняет конфиг на диск и применяет его.
+func (a *App) SaveConfig(c *config.Config) error {
+	// проверяем пресеты до сохранения, чтобы не записать битый конфиг
+	for name, specs := range c.VoicePresets {
+		if _, err := dsp.BuildChain(name, specs, sounds.SampleRate); err != nil {
+			return err
+		}
+	}
+	for k := range c.Hotkeys {
+		if _, err := keys.Parse(k); err != nil {
+			return err
+		}
+	}
+	if c.PTT.Key != "" {
+		if _, err := keys.Parse(c.PTT.Key); err != nil {
+			return fmt.Errorf("ptt: %w", err)
+		}
+	}
+	if err := config.Save(a.ConfigPath, c); err != nil {
+		return err
+	}
+	err := a.Reload()
+	a.stamp = a.computeStamp()
+	return err
+}
+
+// UpdateConfig — изменить конфиг функцией и сохранить.
+func (a *App) UpdateConfig(f func(c *config.Config)) error {
+	c := a.Config()
+	f(c)
+	return a.SaveConfig(c)
+}
+
+// Reload (пере)читывает конфиг, звуки, пресеты, таймеры, горячие клавиши и устройства.
 func (a *App) Reload() error {
 	cfg, err := config.Load(a.ConfigPath)
 	if err != nil {
 		return err
 	}
-	a.tts = winapi.NewTTS(filepath.Join(a.BaseDir, "cache"), cfg.TTSRate)
-	lib := sounds.Load(a.BaseDir, cfg.SoundsDir, cfg.Sounds, a.tts)
+	tts := winapi.NewTTS(filepath.Join(a.BaseDir, "cache"), cfg.TTSRate)
+	lib := sounds.Load(a.BaseDir, cfg.SoundsDir, cfg.Sounds, tts, cfg.Normalize)
 
 	presets := map[string][]dsp.Spec{}
 	for k, v := range dsp.BuiltinPresets {
@@ -95,8 +146,7 @@ func (a *App) Reload() error {
 
 	var pttVK uint32
 	if cfg.PTT.Key != "" {
-		c, err := keys.Parse(cfg.PTT.Key)
-		if err != nil {
+		if c, err := keys.Parse(cfg.PTT.Key); err != nil {
 			log.Printf("ptt.key: %v", err)
 		} else {
 			pttVK = c.VK
@@ -117,15 +167,25 @@ func (a *App) Reload() error {
 
 	a.mu.Lock()
 	first := a.cfg == nil
-	a.cfg, a.lib, a.presets, a.order, a.actions, a.pttVK = cfg, lib, presets, order, actions, pttVK
+	a.cfg, a.lib, a.presets, a.order, a.actions, a.pttVK, a.combos = cfg, lib, presets, order, actions, pttVK, combos
 	a.timers.SetTimers(cfg.Timers)
 	a.mu.Unlock()
 
-	if a.hk != nil {
-		for _, e := range a.hk.Set(combos) {
-			log.Print(e)
+	a.out.SetMix(cfg.MicGain, cfg.Ducking, or1(cfg.SfxVolume), cfg.MonitorVolume, cfg.FxOnSounds)
+	a.applyHotkeys()
+
+	// устройства: перезапуск движка только если выбор изменился
+	opts := audio.Options{MicDevice: cfg.Devices.Mic, VoiceOut: cfg.Devices.VoiceOut, MonitorOut: cfg.Devices.Monitor}
+	a.mu.Lock()
+	changed := a.devOpts == nil || *a.devOpts != opts
+	a.devOpts = &opts
+	a.mu.Unlock()
+	if changed {
+		if err := a.out.Start(opts); err != nil {
+			log.Printf("Аудио: %v", err)
 		}
 	}
+
 	if first {
 		p := cfg.StartPreset
 		if p == "" {
@@ -133,13 +193,38 @@ func (a *App) Reload() error {
 		}
 		a.SetPreset(p, false)
 	} else {
-		a.SetPreset(a.preset, false) // пересобрать, если пресет изменили в конфиге
+		a.SetPreset(a.Preset(), false)
 	}
-	log.Printf("Конфиг загружен: %d звуков, %d горячих клавиш, %d пресетов", len(lib.IDs()), len(combos), len(presets))
-	if pttVK == 0 && cfg.PTT.Auto {
-		log.Printf("ВНИМАНИЕ: ptt.key не задан — звуки уйдут в войс, только если вы сами зажмёте кнопку голосового чата (или включён открытый микрофон).")
-	}
+	log.Printf("Конфиг применён: %d звуков, %d горячих клавиш, %d пресетов", len(lib.IDs()), len(combos), len(presets))
 	return nil
+}
+
+func or1(v float64) float64 {
+	if v == 0 {
+		return 1
+	}
+	return v
+}
+
+func (a *App) applyHotkeys() {
+	if a.hk == nil {
+		return
+	}
+	var combos []keys.Combo
+	if !a.hkPaused.Load() {
+		a.mu.Lock()
+		combos = a.combos
+		a.mu.Unlock()
+	}
+	for _, e := range a.hk.Set(combos) {
+		log.Print(e)
+	}
+}
+
+// PauseHotkeys временно снимает глобальные клавиши (пока в интерфейсе назначают новую).
+func (a *App) PauseHotkeys(on bool) {
+	a.hkPaused.Store(on)
+	a.applyHotkeys()
 }
 
 // AttachHotkeys включает глобальные горячие клавиши.
@@ -154,7 +239,7 @@ func (a *App) AttachHotkeys() {
 	})
 }
 
-// Do выполняет действие: sound:<id>[@bus], preset:<name|next|prev>, stop, rosh, mic_monitor, reload.
+// Do выполняет действие: sound:<id>[@bus], preset:<name|next|prev>, stop, rosh, mic_monitor, reload, ui.
 func (a *App) Do(act string) {
 	switch {
 	case strings.HasPrefix(act, "sound:"):
@@ -176,6 +261,10 @@ func (a *App) Do(act string) {
 		if err := a.Reload(); err != nil {
 			log.Printf("Ошибка конфига: %v", err)
 		}
+	case act == "ui":
+		if a.OnShowUI != nil {
+			a.OnShowUI()
+		}
 	default:
 		log.Printf("Неизвестное действие %q", act)
 	}
@@ -190,6 +279,10 @@ func (a *App) Play(ref string) {
 	s := lib.Get(id)
 	if s == nil {
 		log.Printf("Звук %q не найден", id)
+		return
+	}
+	if !a.out.Running() {
+		log.Printf("Звук %s не сыгран: аудио не запущено (см. «Настройка»)", id)
 		return
 	}
 	clip, ok := s.Pick()
@@ -224,10 +317,11 @@ func (a *App) Play(ref string) {
 	} else {
 		add()
 	}
-	log.Printf("♪ %s → %s", s.ID, map[sounds.Bus]string{sounds.BusBoth: "войс+вы", sounds.BusVoice: "войс", sounds.BusMonitor: "только вы"}[bus])
+	if id != "beep" {
+		log.Printf("♪ %s → %s", s.ID, map[sounds.Bus]string{sounds.BusBoth: "войс + вы", sounds.BusVoice: "войс", sounds.BusMonitor: "только вы"}[bus])
+	}
 }
 
-// pressPTT зажимает кнопку голосового чата, если нужно. true — если нажали сейчас.
 func (a *App) pressPTT() bool {
 	a.mu.Lock()
 	vk, auto := a.pttVK, a.cfg.PTT.Auto
@@ -248,7 +342,9 @@ func (a *App) pressPTT() bool {
 
 // PTTLoop отпускает кнопку голосового чата, когда звуки закончились.
 func (a *App) PTTLoop() {
-	for range time.Tick(15 * time.Millisecond) {
+	t := time.NewTicker(15 * time.Millisecond)
+	defer t.Stop()
+	for range t.C {
 		if !a.pttOwned.Load() {
 			continue
 		}
@@ -264,6 +360,12 @@ func (a *App) PTTLoop() {
 			a.pttOwned.Store(false)
 		}
 	}
+}
+
+func (a *App) Preset() string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.preset
 }
 
 func (a *App) SetPreset(name string, announce bool) {
@@ -307,6 +409,21 @@ func (a *App) cyclePreset(forward bool) {
 	a.SetPreset(order[idx], true)
 }
 
+// PresetNames — порядок пресетов для интерфейса.
+func (a *App) PresetNames() []string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return append([]string(nil), a.order...)
+}
+
+// Sounds — список звуков для интерфейса.
+func (a *App) Sounds() []sounds.Info {
+	a.mu.Lock()
+	lib := a.lib
+	a.mu.Unlock()
+	return lib.Infos()
+}
+
 func fmtClock(s int) string {
 	sign := ""
 	if s < 0 {
@@ -317,17 +434,21 @@ func fmtClock(s int) string {
 
 // RoshKilled — отметка убийства Рошана: аегис 5:00, окно респауна 8:00–11:00.
 func (a *App) RoshKilled() {
+	a.gsiMu.Lock()
 	clock, ok := a.timers.Clock()
+	if ok {
+		a.mu.Lock()
+		r := a.cfg.Rosh
+		a.mu.Unlock()
+		a.timers.AddOneShot("aegis_expire", r.Sound, clock+300, r.AegisWarn)
+		a.timers.AddOneShot("rosh_min", r.Sound, clock+480, r.MinWarn)
+		a.timers.AddOneShot("rosh_max", r.Sound, clock+660, 0)
+	}
+	a.gsiMu.Unlock()
 	if !ok {
-		log.Print("Рошан: нет игрового времени (GSI не подключён?)")
+		log.Print("Рошан: нет игрового времени (Dota не подключена через GSI)")
 		return
 	}
-	a.mu.Lock()
-	r := a.cfg.Rosh
-	a.mu.Unlock()
-	a.timers.AddOneShot("aegis_expire", r.Sound, clock+300, r.AegisWarn)
-	a.timers.AddOneShot("rosh_min", r.Sound, clock+480, r.MinWarn)
-	a.timers.AddOneShot("rosh_max", r.Sound, clock+660, 0)
 	log.Printf("Рошан убит в %s → аегис до %s, респаун %s–%s", fmtClock(clock), fmtClock(clock+300), fmtClock(clock+480), fmtClock(clock+660))
 	a.Play("beep@monitor")
 }
@@ -335,41 +456,97 @@ func (a *App) RoshKilled() {
 // OnGSI обрабатывает пакет состояния от Dota 2.
 func (a *App) OnGSI(st *gsi.State) {
 	if st.Map == nil {
+		a.gsiMu.Lock()
+		a.lastGSI = time.Now()
+		a.gsiMu.Unlock()
 		return
-	}
-	if !a.gsiSeen {
-		a.gsiSeen = true
-		log.Print("GSI: Dota 2 подключена")
 	}
 	a.mu.Lock()
 	events, lowHP := a.cfg.Events, a.cfg.GSI.LowHP
 	a.mu.Unlock()
 
-	if st.Map.GameState == gsi.InProgress || st.Map.GameState == gsi.PreGame {
-		for _, f := range a.timers.Update(st.Map.ClockTime) {
-			log.Printf("⏱ %s (событие в %s, сейчас %s)", f.TimerID, fmtClock(f.EventAt), fmtClock(st.Map.ClockTime))
-			a.Play(f.Sound)
-		}
+	a.gsiMu.Lock()
+	if a.lastGSI.IsZero() {
+		log.Print("GSI: Dota 2 подключена")
 	}
-	for _, ev := range gsi.Diff(a.prevState, st, lowHP) {
+	a.lastGSI = time.Now()
+	if a.prevState != nil && a.prevState.Map != nil && a.prevState.Map.MatchID != st.Map.MatchID {
+		a.timers.Reset()
+	}
+	var fires []timers.Fire
+	if st.Map.GameState == gsi.InProgress || st.Map.GameState == gsi.PreGame {
+		fires = a.timers.Update(st.Map.ClockTime)
+	}
+	evs := gsi.Diff(a.prevState, st, lowHP)
+	a.prevState = st
+	a.gsiMu.Unlock()
+
+	for _, f := range fires {
+		log.Printf("⏱ %s (событие в %s, сейчас %s)", f.TimerID, fmtClock(f.EventAt), fmtClock(st.Map.ClockTime))
+		a.Play(f.Sound)
+	}
+	for _, ev := range evs {
 		if ref := events[ev]; ref != "" {
 			a.Play(ref)
 		}
 	}
-	if a.prevState != nil && a.prevState.Map != nil && a.prevState.Map.MatchID != st.Map.MatchID {
-		a.timers.Reset()
+}
+
+// Status — состояние для интерфейса.
+type Status struct {
+	Preset     string            `json:"preset"`
+	MicMonitor bool              `json:"mic_monitor"`
+	Audio      audio.Status      `json:"audio"`
+	PTTKey     string            `json:"ptt_key"`
+	PTTHeld    bool              `json:"ptt_held"`
+	Game       GameStatus        `json:"game"`
+	Upcoming   []timers.Upcoming `json:"upcoming"`
+}
+
+type GameStatus struct {
+	Connected bool   `json:"connected"`
+	HasClock  bool   `json:"has_clock"`
+	Clock     int    `json:"clock"`
+	State     string `json:"state"`
+	Hero      string `json:"hero,omitempty"`
+	Paused    bool   `json:"paused"`
+	Daytime   bool   `json:"daytime"`
+}
+
+func (a *App) Status() Status {
+	a.mu.Lock()
+	s := Status{Preset: a.preset, PTTKey: a.cfg.PTT.Key}
+	a.mu.Unlock()
+	s.MicMonitor = a.out.MicMonitor()
+	s.Audio = a.out.Status()
+	s.PTTHeld = a.pttOwned.Load()
+	a.gsiMu.Lock()
+	s.Game.Connected = !a.lastGSI.IsZero() && time.Since(a.lastGSI) < 40*time.Second
+	if st := a.prevState; st != nil && st.Map != nil && s.Game.Connected {
+		s.Game.Clock, s.Game.HasClock = st.Map.ClockTime, true
+		s.Game.State = strings.TrimPrefix(st.Map.GameState, "DOTA_GAMERULES_STATE_")
+		s.Game.Paused, s.Game.Daytime = st.Map.Paused, st.Map.Daytime
+		if st.Hero != nil {
+			s.Game.Hero = strings.TrimPrefix(st.Hero.Name, "npc_dota_hero_")
+		}
+		if st.Map.GameState == gsi.InProgress || st.Map.GameState == gsi.PreGame {
+			s.Upcoming = a.timers.Upcoming()
+		}
 	}
-	a.prevState = st
+	a.gsiMu.Unlock()
+	return s
 }
 
 // WatchConfig перезагружает конфиг при изменении config.json или папки со звуками.
 func (a *App) WatchConfig() {
 	a.stamp = a.computeStamp()
-	for range time.Tick(2 * time.Second) {
+	t := time.NewTicker(2 * time.Second)
+	defer t.Stop()
+	for range t.C {
 		s := a.computeStamp()
 		if s != a.stamp {
 			a.stamp = s
-			log.Print("Обнаружены изменения — перезагружаю конфиг и звуки")
+			log.Print("Обнаружены изменения — перечитываю конфиг и звуки")
 			if err := a.Reload(); err != nil {
 				log.Printf("Ошибка конфига: %v", err)
 			}
@@ -382,34 +559,26 @@ func (a *App) computeStamp() string {
 	if st, err := os.Stat(a.ConfigPath); err == nil {
 		fmt.Fprintf(&b, "%d;", st.ModTime().UnixNano())
 	}
-	a.mu.Lock()
-	dir := ""
-	if a.cfg != nil {
-		dir = a.cfg.SoundsDir
-	}
-	a.mu.Unlock()
-	if dir != "" {
-		if !filepath.IsAbs(dir) {
-			dir = filepath.Join(a.BaseDir, dir)
-		}
-		entries, _ := os.ReadDir(dir)
-		for _, e := range entries {
-			if info, err := e.Info(); err == nil {
-				fmt.Fprintf(&b, "%s:%d:%d;", e.Name(), info.Size(), info.ModTime().UnixNano())
-			}
+	dir := a.SoundsDir()
+	entries, _ := os.ReadDir(dir)
+	for _, e := range entries {
+		if info, err := e.Info(); err == nil {
+			fmt.Fprintf(&b, "%s:%d:%d;", e.Name(), info.Size(), info.ModTime().UnixNano())
 		}
 	}
 	return b.String()
 }
 
-// Summary — подсказка при старте.
-func (a *App) Summary() string {
+// SoundsDir — абсолютный путь к папке звуков.
+func (a *App) SoundsDir() string {
 	a.mu.Lock()
-	defer a.mu.Unlock()
-	var keysList []string
-	for k, v := range a.cfg.Hotkeys {
-		keysList = append(keysList, fmt.Sprintf("  %-10s %s", k, v))
+	dir := "sounds"
+	if a.cfg != nil && a.cfg.SoundsDir != "" {
+		dir = a.cfg.SoundsDir
 	}
-	sort.Strings(keysList)
-	return "Горячие клавиши:\n" + strings.Join(keysList, "\n")
+	a.mu.Unlock()
+	if !filepath.IsAbs(dir) {
+		dir = filepath.Join(a.BaseDir, dir)
+	}
+	return dir
 }

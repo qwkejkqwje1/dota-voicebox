@@ -1,17 +1,20 @@
 {
   "devices": {
     "mic": "",
-    "voice_out": "CABLE Input",
+    "voice_out": "",
     "monitor": ""
   },
   "mic_gain": 1.0,
   "ducking": 0.35,
   "fx_on_sounds": false,
   "monitor_volume": 0.8,
+  "sfx_volume": 1.0,
+  "normalize_sounds": true,
 
   "ptt": {
     "key": "",
     "auto": true,
+    "auto_detect": true,
     "lead_ms": 120,
     "tail_ms": 200
   },
@@ -21,7 +24,7 @@
   "tts_rate": 1,
 
   "sounds": {
-    "siren":       { "files": ["builtin:siren"], "bus": "both", "cooldown": 3, "mode": "interrupt", "volume": 0.9 },
+    "siren":       { "label": "🚨 Мид ганкают", "files": ["builtin:siren"], "bus": "both", "cooldown": 3, "mode": "interrupt", "volume": 0.9 },
     "wisdom_rune": { "files": ["builtin:wisdom_rune"], "bus": "monitor", "mode": "ignore" },
     "mid_rune_6":  { "files": ["builtin:mid_rune_6"], "bus": "monitor", "mode": "ignore" },
     "power_rune":  { "files": ["builtin:power_rune"], "bus": "monitor", "mode": "ignore" },
@@ -45,15 +48,16 @@
     "NumSub": "rosh",
     "NumMul": "mic_monitor",
     "NumDot": "stop",
-    "NumDiv": "reload"
+    "NumDiv": "reload",
+    "Ctrl+Alt+V": "ui"
   },
 
   "timers": [
-    { "id": "mid_rune_6",  "sound": "mid_rune_6",  "at": [360], "warn_before": 10 },
-    { "id": "wisdom_rune", "sound": "wisdom_rune", "start": 420, "every": 420, "warn_before": 20 },
-    { "id": "power_rune",  "sound": "power_rune",  "start": 360, "every": 120, "skip": [360], "warn_before": 10, "disabled": true },
-    { "id": "bounty_rune", "sound": "bounty_rune", "start": 180, "every": 180, "warn_before": 10, "disabled": true },
-    { "id": "stack",       "sound": "stack@monitor", "start": 50, "every": 60, "until": 1200, "disabled": true }
+    { "id": "mid_rune_6",  "label": "Руна в миду 6:00", "sound": "mid_rune_6",  "at": [360], "warn_before": 10 },
+    { "id": "wisdom_rune", "label": "Руна мудрости", "sound": "wisdom_rune", "start": 420, "every": 420, "warn_before": 20 },
+    { "id": "power_rune",  "label": "Руна силы", "sound": "power_rune",  "start": 360, "every": 120, "skip": [360], "warn_before": 10, "disabled": true },
+    { "id": "bounty_rune", "label": "Руна богатства", "sound": "bounty_rune", "start": 180, "every": 180, "warn_before": 10, "disabled": true },
+    { "id": "stack",       "label": "Стак крипов", "sound": "stack@monitor", "start": 50, "every": 60, "until": 1200, "disabled": true }
   ],
 
   "rosh": {
@@ -73,5 +77,12 @@
     "low_hp_percent": 25
   },
 
-  "voice_presets": {}
+  "voice_presets": {},
+
+  "ui": {
+    "port": 3001,
+    "keep_running_on_close": false,
+    "open_on_start": true
+  },
+  "setup_done": false
 }

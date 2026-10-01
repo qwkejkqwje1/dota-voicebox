@@ -61,3 +61,19 @@ func TestOneShotAndReset(t *testing.T) {
 		t.Fatalf("oneshot survived reset: %v", f)
 	}
 }
+
+func TestUpcoming(t *testing.T) {
+	e := New([]Timer{
+		{ID: "wisdom", Sound: "w", Start: 420, Every: 420},
+		{ID: "mid6", Sound: "m", At: []int{360}},
+	})
+	e.Update(300)
+	u := e.Upcoming()
+	if len(u) != 2 || u[0].ID != "mid6" || u[0].In != 60 || u[1].EventAt != 420 {
+		t.Fatalf("%+v", u)
+	}
+	e.Update(400)
+	if u := e.Upcoming(); len(u) != 1 || u[0].ID != "wisdom" {
+		t.Fatalf("%+v", u)
+	}
+}

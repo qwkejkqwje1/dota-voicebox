@@ -4,20 +4,29 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
+	"time"
 
 	"github.com/qwkejkqwje1/dota-voicebox/internal/app"
 	"github.com/qwkejkqwje1/dota-voicebox/internal/audio"
 	"github.com/qwkejkqwje1/dota-voicebox/internal/config"
 	"github.com/qwkejkqwje1/dota-voicebox/internal/gsi"
+	"github.com/qwkejkqwje1/dota-voicebox/internal/logbus"
 	"github.com/qwkejkqwje1/dota-voicebox/internal/sounds"
+	"github.com/qwkejkqwje1/dota-voicebox/internal/ui"
 	"github.com/qwkejkqwje1/dota-voicebox/internal/winapi"
 )
 
 var version = "dev"
+
+// Окно WebView2 должно жить в главном потоке.
+func init() { runtime.LockOSThread() }
 
 func main() {
 	exe, _ := os.Executable()
@@ -27,6 +36,7 @@ func main() {
 	listDev := flag.Bool("list-devices", false, "показать аудиоустройства и выйти")
 	installGSI := flag.Bool("install-gsi", false, "установить GSI-конфиг в папку Dota 2 и выйти")
 	exportDir := flag.String("export-sounds", "", "сохранить встроенные звуки в WAV в указанную папку и выйти")
+	background := flag.Bool("background", false, "запуск без окна (автозагрузка)")
 	showVer := flag.Bool("version", false, "версия")
 	flag.Parse()
 	log.SetFlags(log.Ltime)
@@ -54,15 +64,25 @@ func main() {
 	}
 
 	abs, _ := filepath.Abs(*cfgPath)
-	if created, err := config.EnsureFile(abs); err != nil {
-		log.Fatal(err)
-	} else if created {
-		log.Printf("Создан %s — откройте его и укажите ptt.key (кнопка голосового чата в Dota 2).", abs)
+	base := filepath.Dir(abs)
+	if _, err := config.EnsureFile(abs); err != nil {
+		fatal("Не удалось создать config.json: %v", err)
 	}
-	os.MkdirAll(filepath.Join(filepath.Dir(abs), "sounds"), 0o755)
+	os.MkdirAll(filepath.Join(base, "sounds"), 0o755)
 	cfg, err := config.Load(abs)
 	if err != nil {
-		log.Fatal(err)
+		fatal("Ошибка в config.json: %v", err)
+	}
+	port := cfg.UI.Port
+	if port == 0 {
+		port = 3001
+	}
+	addr := fmt.Sprintf("127.0.0.1:%d", port)
+
+	// уже запущена? — показать окно существующей копии и выйти
+	if pingExisting(addr) {
+		http.Post("http://"+addr+"/api/show", "text/plain", nil)
+		return
 	}
 
 	if *installGSI {
@@ -75,29 +95,38 @@ func main() {
 			log.Fatal(err)
 		}
 		fmt.Println("GSI установлен:", p)
-		fmt.Println("Добавьте в параметры запуска Dota 2: -gamestateintegration")
 		return
 	}
 
-	eng := audio.NewEngine(audio.Options{
-		MicDevice: cfg.Devices.Mic, VoiceOut: cfg.Devices.VoiceOut, MonitorOut: cfg.Devices.Monitor,
-		MicGain: cfg.MicGain, Ducking: cfg.Ducking, FxOnSounds: cfg.FxOnSounds, MonitorVolume: cfg.MonitorVolume,
-	})
-	if err := eng.Start(); err != nil {
-		log.Printf("Ошибка аудио: %v", err)
-		log.Print("Проверьте устройства: voicebox.exe -list-devices, и поле devices в config.json")
-		os.Exit(1)
+	// журнал: файл + интерфейс + консоль
+	logs := logbus.New(500)
+	logPath := filepath.Join(base, "voicebox.log")
+	if st, err := os.Stat(logPath); err == nil && st.Size() > 1<<20 {
+		os.Remove(logPath)
 	}
-	defer eng.Close()
+	lf, _ := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	writers := []io.Writer{logs, os.Stdout}
+	if lf != nil {
+		writers = append(writers, lf)
+		defer lf.Close()
+	}
+	log.SetOutput(io.MultiWriter(writers...))
+	log.Printf("Dota VoiceBox %s запущен", version)
+	winapi.SetHighPriority()
 
+	eng := audio.NewEngine()
 	a := app.New(abs, eng)
+	a.Version = version
 	a.AttachHotkeys()
 	if err := a.Reload(); err != nil {
-		log.Fatal(err)
+		fatal("Ошибка конфига: %v", err)
 	}
 	go a.PTTLoop()
 	go a.WatchConfig()
-
+	go a.Watchdog()
+	if !cfg.SetupDone {
+		go a.AutoSetup(false)
+	}
 	if cfg.GSI.Enabled {
 		srv := &gsi.Server{Addr: cfg.GSI.Addr, Token: cfg.GSI.Token, OnState: a.OnGSI}
 		go func() {
@@ -108,9 +137,77 @@ func main() {
 		}()
 	}
 
-	fmt.Println(a.Summary())
-	log.Print("Готово. Ctrl+C — выход.")
+	showCh := make(chan struct{}, 1)
+	quitCh := make(chan struct{}, 1)
+	show := func() {
+		select {
+		case showCh <- struct{}{}:
+		default:
+		}
+	}
+	quit := func() {
+		select {
+		case quitCh <- struct{}{}:
+		default:
+		}
+	}
+	a.OnShowUI = show
+
+	srv := &ui.Server{App: a, Engine: eng, Logs: logs, Token: ui.NewToken(), Addr: addr, OnShow: show, OnQuit: quit}
+	l, err := srv.Listen()
+	if err != nil {
+		fatal("Порт интерфейса %s занят: %v", addr, err)
+	}
+	go srv.Serve(l)
+	log.Printf("Интерфейс: http://%s/", addr)
+
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, os.Interrupt)
-	<-sig
+	go func() { <-sig; quit() }()
+
+	if !*background && cfg.UI.OpenOnStart {
+		show()
+	}
+	defer func() {
+		eng.Close()
+		log.Print("Выход")
+	}()
+	for {
+		select {
+		case <-quitCh:
+			return
+		case <-showCh:
+			if !ui.OpenWindow(srv.URL()) {
+				winapi.OpenURL(srv.URL())
+				continue // в браузере: работаем, пока не нажмут «Выход»
+			}
+			// окно закрыто
+			select {
+			case <-showCh: // сбросить запросы, пришедшие пока окно было открыто
+			default:
+			}
+			if !a.Config().UI.KeepRunningOnClose {
+				return
+			}
+			log.Print("Окно закрыто — VoiceBox работает в фоне (Ctrl+Alt+V или повторный запуск — открыть)")
+		}
+	}
+}
+
+func pingExisting(addr string) bool {
+	cl := http.Client{Timeout: 700 * time.Millisecond}
+	r, err := cl.Get("http://" + addr + "/api/ping")
+	if err != nil {
+		return false
+	}
+	defer r.Body.Close()
+	b, _ := io.ReadAll(r.Body)
+	return string(b) == "voicebox"
+}
+
+func fatal(f string, args ...any) {
+	msg := fmt.Sprintf(f, args...)
+	log.Print(msg)
+	winapi.Alert("Dota VoiceBox", msg)
+	os.Exit(1)
 }

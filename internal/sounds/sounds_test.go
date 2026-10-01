@@ -30,7 +30,7 @@ func TestLibraryDropIn(t *testing.T) {
 	os.WriteFile(filepath.Join(dir, "sounds", "my_gank.wav"), EncodeWAV16(c), 0o644)
 	lib := Load(dir, "sounds", map[string]Def{
 		"alarm": {Files: []string{"builtin:siren", "sounds/my_gank.wav"}, Bus: "voice", Cooldown: 5},
-	}, nil)
+	}, nil, true)
 	if lib.Get("my_gank") == nil || lib.Get("siren") == nil {
 		t.Fatal("нет автоподхваченного или встроенного звука")
 	}
@@ -43,5 +43,19 @@ func TestLibraryDropIn(t *testing.T) {
 	}
 	if _, ok := a.Pick(); ok {
 		t.Fatal("кулдаун не сработал")
+	}
+}
+
+func TestNormalize(t *testing.T) {
+	c := make(Clip, 48000)
+	for i := 1000; i < len(c); i++ {
+		c[i] = 0.01
+		if i%2 == 0 {
+			c[i] = -0.01
+		}
+	}
+	n := Normalize(c)
+	if len(n) != 47000 || (n[0] < 0.1 && n[0] > -0.1) {
+		t.Fatalf("len=%d first=%v", len(n), n[0])
 	}
 }

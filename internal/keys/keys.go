@@ -30,7 +30,7 @@ var vk = map[string]uint32{
 	"NUM5": 0x65, "NUM6": 0x66, "NUM7": 0x67, "NUM8": 0x68, "NUM9": 0x69,
 	"NUMMUL": 0x6A, "NUMADD": 0x6B, "NUMSUB": 0x6D, "NUMDOT": 0x6E, "NUMDIV": 0x6F,
 	"SCROLLLOCK": 0x91, "TILDE": 0xC0, "`": 0xC0,
-	"MOUSE4": 0x05, "MOUSE5": 0x06, // XBUTTON1/2 — годятся только как PTT-клавиша для опроса
+	"MOUSE3": 0x04, "MOUSE4": 0x05, "MOUSE5": 0x06, // XBUTTON1/2 — годятся только как PTT-клавиша для опроса
 	"LSHIFT": 0xA0, "RSHIFT": 0xA1, "LCTRL": 0xA2, "RCTRL": 0xA3, "LALT": 0xA4, "RALT": 0xA5,
 }
 

@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dota VoiceBox</title>
+<link rel="stylesheet" href="style.css">
+<link rel="icon" href="icon.png">
+</head>
+<body>
+<aside id="nav">
+  <div class="brand"><img src="icon.png" width="22" style="vertical-align:-5px"> <b>VoiceBox</b><small id="ver"></small></div>
+  <button data-page="home" class="active">🏠 Главная</button>
+  <button data-page="sounds">🔊 Звуки</button>
+  <button data-page="timers">⏱ Таймеры</button>
+  <button data-page="voice">🎛 Голос</button>
+  <button data-page="keys">⌨️ Клавиши</button>
+  <button data-page="setup">⚙️ Настройка <span id="setupBadge" class="badge hidden">!</span></button>
+  <button data-page="log">📜 Журнал</button>
+  <div class="grow"></div>
+  <button id="quitBtn" class="ghost">⏻ Выход</button>
+</aside>
+<main>
+  <header id="pills"></header>
+  <section id="page"></section>
+</main>
+<div id="toast"></div>
+<div id="modal" class="hidden"><div class="modal-box"><div id="modalBody"></div></div></div>
+<script src="app.js"></script>
+</body>
+</html>

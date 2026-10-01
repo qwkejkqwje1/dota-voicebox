@@ -15,6 +15,7 @@ import (
 //	warn_before: 15                 — сыграть звук за 15 секунд до события
 type Timer struct {
 	ID         string `json:"id"`
+	Label      string `json:"label,omitempty"`
 	Sound      string `json:"sound"`
 	At         []int  `json:"at,omitempty"`
 	Start      int    `json:"start,omitempty"`
@@ -143,3 +144,39 @@ func (e *Engine) Update(clock int) []Fire {
 
 // Clock возвращает последнее известное игровое время.
 func (e *Engine) Clock() (int, bool) { return e.last, e.have }
+
+// Upcoming — ближайшее событие таймера (для интерфейса).
+type Upcoming struct {
+	ID      string `json:"id"`
+	Label   string `json:"label,omitempty"`
+	EventAt int    `json:"event_at"`
+	In      int    `json:"in"`
+}
+
+// Upcoming возвращает ближайшие события всех включённых таймеров, отсортированные по времени.
+func (e *Engine) Upcoming() []Upcoming {
+	if !e.have {
+		return nil
+	}
+	clock := e.last
+	var out []Upcoming
+	add := func(t Timer) {
+		if t.Disabled {
+			return
+		}
+		occ := occurrences(t, clock, clock+3600)
+		if len(occ) == 0 {
+			return
+		}
+		sort.Ints(occ)
+		out = append(out, Upcoming{ID: t.ID, Label: t.Label, EventAt: occ[0], In: occ[0] - clock})
+	}
+	for _, t := range e.timers {
+		add(t)
+	}
+	for _, t := range e.oneshot {
+		add(t)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].EventAt < out[j].EventAt })
+	return out
+}

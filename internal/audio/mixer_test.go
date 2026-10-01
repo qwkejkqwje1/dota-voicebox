@@ -32,3 +32,13 @@ func TestRing(t *testing.T) {
 		t.Fatal(out)
 	}
 }
+
+func TestFindCable(t *testing.T) {
+	p := []Device{{Name: "Динамики (Realtek)"}, {Name: "CABLE Input (VB-Audio Virtual Cable)"}}
+	if FindCable(p) != "CABLE Input (VB-Audio Virtual Cable)" {
+		t.Fatal("кабель не найден")
+	}
+	if !IsCableInput("CABLE Output (VB-Audio Virtual Cable)") || IsCableInput("Микрофон (USB)") {
+		t.Fatal("IsCableInput")
+	}
+}

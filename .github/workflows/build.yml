@@ -34,7 +34,7 @@ jobs:
           CGO_ENABLED: "1"
         run: |
           VER="${GITHUB_REF_NAME}"
-          go build -trimpath -ldflags "-s -w -X main.version=${VER}" -o dist/voicebox.exe ./cmd/voicebox
+          go build -trimpath -ldflags "-s -w -H windowsgui -X main.version=${VER}" -o dist/voicebox.exe ./cmd/voicebox
           cp config.example.json dist/config.json
           cp README.md dist/
           mkdir -p dist/sounds dist/gsi

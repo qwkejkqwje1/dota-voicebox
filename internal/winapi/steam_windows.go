@@ -2,18 +2,20 @@
 
 package winapi
 
-import "golang.org/x/sys/windows/registry"
+import (
+	"path/filepath"
+
+	"golang.org/x/sys/windows/registry"
+)
 
 // SteamRoot читает путь Steam из реестра.
 func SteamRoot() string {
 	k, err := registry.OpenKey(registry.CURRENT_USER, `Software\Valve\Steam`, registry.QUERY_VALUE)
-	if err != nil {
-		return `C:\Program Files (x86)\Steam`
+	if err == nil {
+		defer k.Close()
+		if p, _, err := k.GetStringValue("SteamPath"); err == nil && p != "" {
+			return filepath.Clean(p)
+		}
 	}
-	defer k.Close()
-	p, _, err := k.GetStringValue("SteamPath")
-	if err != nil {
-		return `C:\Program Files (x86)\Steam`
-	}
-	return p
+	return `C:\Program Files (x86)\Steam`
 }

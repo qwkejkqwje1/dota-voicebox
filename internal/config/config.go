@@ -26,12 +26,15 @@ type Config struct {
 	Ducking       float64 `json:"ducking"`
 	FxOnSounds    bool    `json:"fx_on_sounds"`
 	MonitorVolume float64 `json:"monitor_volume"`
+	SfxVolume     float64 `json:"sfx_volume"`
+	Normalize     bool    `json:"normalize_sounds"`
 
 	PTT struct {
-		Key    string `json:"key"`
-		Auto   bool   `json:"auto"`
-		LeadMS int    `json:"lead_ms"`
-		TailMS int    `json:"tail_ms"`
+		Key        string `json:"key"`
+		Auto       bool   `json:"auto"`
+		AutoDetect bool   `json:"auto_detect"`
+		LeadMS     int    `json:"lead_ms"`
+		TailMS     int    `json:"tail_ms"`
 	} `json:"ptt"`
 
 	StartPreset string                `json:"start_preset"`
@@ -53,6 +56,25 @@ type Config struct {
 		LowHP   int    `json:"low_hp_percent"`
 	} `json:"gsi"`
 	VoicePresets map[string][]dsp.Spec `json:"voice_presets"`
+	UI           struct {
+		Port               int  `json:"port"`
+		KeepRunningOnClose bool `json:"keep_running_on_close"`
+		OpenOnStart        bool `json:"open_on_start"`
+	} `json:"ui"`
+	SetupDone bool `json:"setup_done"`
+}
+
+// Save записывает конфиг атомарно (через временный файл).
+func Save(path string, c *Config) error {
+	b, err := json.MarshalIndent(c, "", "  ")
+	if err != nil {
+		return err
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, b, 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
 }
 
 // Load читает конфиг; поверх значений по умолчанию.
