@@ -6,6 +6,8 @@ let LV = {mic_in:0, voice_out:0, monitor:0};
 let page = 'home';
 const peaks = {mic_in:0, voice_out:0, monitor:0};
 
+window.addEventListener('error', e => toast('Ошибка интерфейса: ' + e.message, true));
+window.addEventListener('unhandledrejection', e => toast('Ошибка интерфейса: ' + (e.reason && e.reason.message || e.reason), true));
 // ---------- утилиты ----------
 function h(tag, attrs, ...kids) {
   const el = document.createElement(tag);
@@ -151,7 +153,9 @@ pages.home = () => {
         h('button', {class: ST.mic_monitor ? 'on' : '', onclick: () => api('POST', '/api/action', {action: 'mic_monitor'})}, '🎧 Слышать себя'),
         h('span', {class: 'mute'}, 'включите, чтобы подобрать пресет'))),
     h('div', {class: 'card'}, h('h3', {}, 'Игра'), h('div', {id: 'game'}), h('div', {class: 'row', style: 'margin-top:10px'},
-      h('button', {onclick: () => api('POST', '/api/action', {action: 'rosh'})}, '🐉 Рошан убит'), ...kbd(hotkeysFor('rosh')))),
+      h('button', {onclick: () => api('POST', '/api/action', {action: 'rosh'})}, '🐉 Рошан убит'), ...kbd(hotkeysFor('rosh')),
+      h('button', {title: 'Если Dota не подключена: нажмите в момент горна — таймеры и скрипты пойдут по ручному времени', onclick: () => api('POST', '/api/clock', {mode: 'horn'}).then(() => toast('Отсчёт с 0:00'))}, '📯 Горн 0:00'), ...kbd(hotkeysFor('clock_horn')),
+      h('button', {title: 'Задать текущее игровое время вручную', onclick: () => { const t = prompt('Сколько сейчас на игровых часах? (например 12:34)'); if (t) api('POST', '/api/clock', {mode: 'sync', time: t}).then(() => toast('Время: ' + t)).catch(e => toast(e.message, true)); }}, '🕐 Синхр.'))),
     h('div', {class: 'card'}, h('h3', {}, 'Звуки'), h('div', {class: 'btns'}, soundBtns.length ? soundBtns : h('span', {class: 'mute'}, 'Добавьте звуки во вкладке «Звуки»')),
       h('div', {class: 'row', style: 'margin-top:12px'}, h('button', {onclick: () => api('POST', '/api/action', {action: 'stop'})}, '⏹ Стоп всё'), ...kbd(hotkeysFor('stop')))),
     h('div', {class: 'card'}, h('h3', {}, 'Уровни и громкость'),
@@ -166,10 +170,13 @@ pages.home = () => {
 function renderGame() {
   const el = document.getElementById('game'); if (!el || !ST) return;
   const g = ST.game;
-  if (!g.connected) { el.replaceChildren(h('div', {class: 'clock mute'}, '--:--'), h('p', {class: 'mute'}, 'Запустите Dota 2. Если игра уже запущена — проверьте вкладку «Настройка».')); return; }
+  const ci = g.clock_info || {};
+  const src = {gsi: ['ok', 'GSI · ' + (ci.rate || 0) + ' пак/с'], estimate: ['warn', '≈ оценка: нет данных ' + Math.round(ci.packet_age) + ' с'], manual: ['warn', 'ручное время'], idle: ['', 'матч не идёт'], none: ['', '']}[ci.source] || ['', ''];
+  const srcEl = src[1] ? h('span', {class: 'pill ' + src[0], style: 'margin-left:10px;vertical-align:middle'}, src[1]) : '';
+  if (!g.connected && ci.source !== 'manual') { el.replaceChildren(h('div', {class: 'clock mute'}, '--:--'), h('p', {class: 'mute'}, 'Запустите Dota 2. Если игра уже запущена — проверьте вкладку «Настройка». Без Dota можно нажать «Горн 0:00».')); return; }
   const up = (ST.upcoming || []).slice(0, 6).map(u => [h('span', {}, (u.label || u.id) + ' ', h('span', {class: 'mute'}, 'в ' + fmt(u.event_at))), h('b', {style: 'text-align:right'}, fmt(u.in)),
     h('div', {class: 'bar'}, h('i', {style: `width:${Math.max(0, 100 - u.in / 1.2)}%`}))]);
-  el.replaceChildren(h('div', {class: 'clock'}, g.has_clock ? fmt(g.clock) : '--:--', g.paused ? ' ⏸' : ''),
+  el.replaceChildren(h('div', {class: 'clock'}, g.has_clock ? fmt(g.clock) : '--:--', g.paused ? ' ⏸' : '', srcEl),
     h('div', {class: 'mute'}, [g.hero && ('Герой: ' + g.hero), g.daytime ? '☀️ день' : '🌙 ночь', (g.state || '').toLowerCase().replaceAll('_', ' ')].filter(Boolean).join(' · ')),
     up.length ? h('div', {class: 'up'}, up) : h('p', {class: 'mute'}, 'Таймеры появятся, когда начнётся матч'));
 }
@@ -281,7 +288,7 @@ pages.voice = () => {
 function actionOptions(sel) {
   const opts = [['Звуки', S.sounds.flatMap(s => [['sound:' + s.id, '🔊 ' + (s.label || s.id)], ['sound:' + s.id + '@monitor', '🎧 ' + (s.label || s.id) + ' (только мне)']])],
     ['Голос', [...S.presets.map(p => ['preset:' + p.name, '🎙 ' + p.name]), ['preset:next', '🎙 следующий пресет'], ['preset:prev', '🎙 предыдущий пресет']]],
-    ['Прочее', [['rosh', '🐉 Рошан убит'], ['stop', '⏹ стоп всё'], ['mic_monitor', '🎧 слышать себя'], ['reload', '🔄 перечитать конфиг'], ['ui', '🪟 открыть окно']]]];
+    ['Прочее', [['rosh', '🐉 Рошан убит'], ['clock_horn', '📯 горн 0:00 (ручное время)'], ['stop', '⏹ стоп всё'], ['mic_monitor', '🎧 слышать себя'], ['reload', '🔄 перечитать конфиг'], ['ui', '🪟 открыть окно']]]];
   return opts.map(([g, items]) => h('optgroup', {label: g}, items.map(([v, l]) => h('option', {value: v, selected: v === sel}, l))));
 }
 pages.keys = () => {
@@ -296,6 +303,187 @@ pages.keys = () => {
     h('div', {class: 'hint'}, 'Клавиши глобальные — работают поверх Dota 2. Не используйте клавиши, нужные в игре (QWERDF, ZXCVBN и т.п.). Numpad и F-клавиши — хороший выбор.'),
     h('table', {}, h('tr', {}, h('th', {}, 'Клавиша'), h('th', {}, 'Действие'), h('th', {}, '')), rows),
     h('div', {class: 'row', style: 'margin-top:12px'}, newAct, h('button', {class: 'primary', onclick: async () => { const k = await captureKey('Клавиша для действия'); if (k) bindHotkey(newAct.value, k); }}, '＋ Назначить клавишу')));
+};
+
+// ---------- скрипты ----------
+const API_REF = [
+  ['hotkey("Ctrl+F1", fn)', 'клавиша или сочетание', 'hotkey("Ctrl+F1", () => {\n  play("siren", { to: "team" });\n});\n'],
+  ['combo("Num1 Num1", fn, {within: 400})', 'последовательность: двойное нажатие, «Num1 Num2»…', 'combo("Num1 Num1", () => {\n  say("Мид, ганк!", { to: "team" });\n}, { within: 400 });\n'],
+  ['hold("Num3", 500, fn, onRelease)', 'удержание клавиши N мс; onRelease — при отпускании', 'hold("Num3", 500, () => {\n  play("siren", { to: "team" });\n}, () => stop("siren"));\n'],
+  ['onKey("F9", (down) => …)', 'любое нажатие/отпускание клавиши', 'onKey("F9", (down) => {\n  if (down) log("F9 нажата");\n});\n'],
+  ['at("6:00", fn, {before: 10})', 'разово по игровому времени (за N с до)', 'at("6:00", () => {\n  say("Руны через 10 секунд", { to: "me" });\n}, { before: 10 });\n'],
+  ['every("7:00", fn, {from, until, before})', 'повторять по игровому времени', 'every("7:00", (t) => {\n  notify("Руна мудрости в " + fmt(t));\n}, { from: "7:00", before: 20 });\n'],
+  ['on("death", fn)', 'событие: kill, death, respawn, low_hp, night, day, rosh_killed, game_start, new_game, clock, state…', 'on("death", () => {\n  play("beep", { to: "me" });\n});\n'],
+  ['after(5, fn) / repeat(2, fn) / cancel(id)', 'реальные секунды (не игровые)', 'const id = repeat(2, () => log("тик"));\nafter(10, () => cancel(id));\n'],
+  ['play("siren", {to, volume})', 'звук: to = "team" (войс + вы), "me" (только вы), "both"', 'play("siren", { to: "team", volume: 0.8 });\n'],
+  ['say("текст", {to})', 'озвучить текст голосом Windows (по умолчанию в войс)', 'say("Мид пропал!", { to: "team" });\n'],
+  ['stop() / stop("siren")', 'остановить звуки', 'stop();\n'],
+  ['preset("radio") / preset()', 'включить пресет голоса / узнать текущий', 'preset("radio");\n'],
+  ['action("rosh")', 'любое действие клавиш: rosh, stop, mic_monitor, clock_horn, preset:next…', 'action("rosh");\n'],
+  ['notify("текст") / log(…)', 'всплывающее уведомление в окне / строка в журнал', 'notify("Готово");\n'],
+  ['game.clock · game.seconds · game.hero', 'игровое время (null — нет игры), герой, game.paused, game.daytime, game.state, game.clockSource', 'if (game.clock !== null && game.clock > 20 * 60) {\n  log("поздняя игра");\n}\n'],
+  ['game.raw', 'весь JSON от Dota: hero, player, abilities, items, buildings', 'on("state", () => {\n  const r = game.raw;\n  if (r && r.hero) log(r.hero.health);\n});\n'],
+  ['time("6:00") / fmt(360)', 'перевод времени: строка ⇄ секунды', 'log(fmt(time("6:00") + 30));\n'],
+];
+const JS_KW = /\b(const|let|var|function|return|if|else|for|while|of|in|new|true|false|null|undefined|break|continue|switch|case|default|typeof)\b/;
+const API_NAMES = /\b(hotkey|combo|hold|onKey|at|every|on|after|repeat|cancel|play|say|stop|preset|action|notify|log|game|time|fmt)\b/;
+function highlight(code) {
+  const esc = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;');
+  const re = /(\/\/[^\n]*|\/\*[\s\S]*?\*\/)|("(?:\\.|[^"\\\n])*"?|'(?:\\.|[^'\\\n])*'?|`(?:\\.|[^`\\])*`?)|(\b\d+(?:\.\d+)?\b)|([A-Za-z_$][\w$]*)/g;
+  let out = '', last = 0, m;
+  while ((m = re.exec(code))) {
+    out += esc(code.slice(last, m.index));
+    const t = esc(m[0]);
+    if (m[1]) out += '<i class="c">' + t + '</i>';
+    else if (m[2]) out += '<i class="s">' + t + '</i>';
+    else if (m[3]) out += '<i class="n">' + t + '</i>';
+    else if (JS_KW.test(m[0]) && m[0].match(JS_KW)[0] === m[0]) out += '<i class="k">' + t + '</i>';
+    else if (API_NAMES.test(m[0]) && m[0].match(API_NAMES)[0] === m[0]) out += '<i class="f">' + t + '</i>';
+    else out += t;
+    last = re.lastIndex;
+  }
+  return out + esc(code.slice(last)) + '\n';
+}
+let SCR = null;          // список скриптов
+let SC = null;           // {name, code, saved, err:{error,line}}
+async function loadScripts(open) {
+  try { SCR = (await api('GET', '/api/scripts')).scripts; } catch (e) { toast(e.message, true); SCR = []; }
+  if (open || (!SC && SCR.length)) await openScript(open || (SCR.find(s => s.enabled) || SCR[0]).name, true);
+  if (page === 'scripts') render();
+}
+async function openScript(name, quiet) {
+  if (SC && SC.code !== SC.saved && !confirm('Есть несохранённые изменения в «' + SC.name + '». Отбросить?')) return;
+  try { const r = await api('GET', '/api/scripts/code?name=' + encodeURIComponent(name)); SC = {name, code: r.code, saved: r.code, err: null}; }
+  catch (e) { toast(e.message, true); }
+  if (!quiet) render();
+}
+async function saveScript(enable) {
+  if (!SC) return;
+  try {
+    const r = await api('PUT', '/api/scripts', {name: SC.name, code: SC.code, enable});
+    SC.saved = SC.code; SC.err = r.compile.error ? r.compile : null; SCR = r.scripts;
+    if (SC.err) toast('Сохранено, но есть ошибка в строке ' + (SC.err.line || '?'), true); else toast('Сохранено: ' + SC.name);
+  } catch (e) { toast(e.message, true); }
+  render();
+}
+function scriptEditor() {
+  const lines = h('div', {class: 'gut'});
+  const pre = h('pre', {class: 'hl'});
+  const ta = h('textarea', {class: 'code', spellcheck: false, value: SC.code, wrap: 'off'});
+  const paint = () => {
+    const n = SC.code.split('\n').length;
+    const errLine = SC.err && SC.err.line;
+    lines.replaceChildren(...Array.from({length: n}, (_, i) => h('div', {class: i + 1 === errLine ? 'errl' : ''}, i + 1)));
+    pre.innerHTML = highlight(SC.code);
+    const dirty = document.getElementById('scDirty'); if (dirty) dirty.textContent = SC.code !== SC.saved ? '● не сохранено' : '';
+  };
+  let chk = null;
+  ta.addEventListener('input', () => {
+    SC.code = ta.value; paint();
+    clearTimeout(chk); chk = setTimeout(async () => {
+      try { const r = await api('POST', '/api/scripts/check', {name: SC.name, code: SC.code}); SC.err = r.error ? r : null; paint(); showErr(); } catch (e) {}
+    }, 600);
+  });
+  ta.addEventListener('scroll', () => { pre.scrollTop = ta.scrollTop; pre.scrollLeft = ta.scrollLeft; lines.scrollTop = ta.scrollTop; });
+  ta.addEventListener('keydown', e => {
+    if (e.key === 'Tab') { e.preventDefault(); document.execCommand('insertText', false, '  '); }
+    if ((e.ctrlKey || e.metaKey) && e.code === 'KeyS') { e.preventDefault(); saveScript(); }
+    if (e.key === 'Enter') { // автоотступ
+      const before = ta.value.slice(0, ta.selectionStart); const ind = (before.split('\n').pop().match(/^\s*/) || [''])[0];
+      const extra = /[{(\[]\s*$/.test(before) ? '  ' : '';
+      e.preventDefault(); document.execCommand('insertText', false, '\n' + ind + extra);
+    }
+  });
+  const errBox = h('div', {id: 'scErr'});
+  function showErr() {
+    errBox.replaceChildren(SC.err ? h('div', {class: 'errbox', onclick: () => gotoLine(SC.err.line)}, '⚠ ', SC.err.line ? 'Строка ' + SC.err.line + ': ' : '', SC.err.error) : '');
+  }
+  function gotoLine(n) {
+    if (!n) return; const pos = SC.code.split('\n').slice(0, n - 1).join('\n').length + (n > 1 ? 1 : 0);
+    ta.focus(); ta.setSelectionRange(pos, pos); ta.scrollTop = Math.max(0, (n - 5) * 18);
+  }
+  window._scInsert = snippet => { ta.focus(); document.execCommand('insertText', false, snippet); };
+  setTimeout(() => { paint(); showErr(); });
+  return h('div', {}, h('div', {class: 'ed'}, lines, h('div', {class: 'edw'}, pre, ta)), errBox);
+}
+pages.scripts = () => {
+  if (!SCR) { loadScripts(); return h('p', {class: 'mute'}, 'Загружаю скрипты…'); }
+  const info = SC && SCR.find(s => s.name === SC.name);
+  const list = SCR.map(s => h('div', {class: 'scitem' + (SC && SC.name === s.name ? ' on' : ''), onclick: () => openScript(s.name)},
+    h('label', {class: 'sw', onclick: e => e.stopPropagation()}, h('input', {type: 'checkbox', checked: s.enabled, onchange: async e => {
+      try { SCR = (await api('POST', '/api/scripts/enable', {name: s.name, on: e.target.checked})).scripts; render(); } catch (er) { toast(er.message, true); } }})),
+    h('div', {style: 'min-width:0'}, h('b', {}, s.name), h('small', {}, s.title || ''),
+      h('small', {class: s.error ? 'bad' : (s.running ? 'ok' : 'mute')}, s.error ? '⚠ ошибка' : (s.running ? '● работает' : (s.enabled ? 'не запущен' : 'выключен'))))));
+  const newBtn = h('button', {onclick: async () => {
+    const n = (prompt('Имя скрипта (латиница/кириллица, цифры, _ и -):', 'my_script') || '').trim();
+    if (!n) return;
+    if (SCR.some(s => s.name === n)) return toast('Уже есть', true);
+    SC = null;
+    try { await api('PUT', '/api/scripts', {name: n, code: '// ' + n + ': описание\n\nhotkey("F9", () => {\n  play("beep", { to: "me" });\n  notify("Работает!");\n});\n', enable: true}); await loadScripts(n); } catch (e) { toast(e.message, true); }
+  }}, '＋ Новый скрипт');
+  const editorCard = !SC ? h('div', {class: 'card'}, h('p', {class: 'mute'}, 'Создайте скрипт или выберите слева.')) :
+    h('div', {class: 'card'},
+      h('div', {class: 'row', style: 'margin-bottom:10px'}, h('h3', {style: 'margin:0'}, SC.name + '.js'), h('span', {id: 'scDirty', class: 'warn'}), h('div', {class: 'grow'}),
+        h('button', {class: 'primary', onclick: () => saveScript()}, '💾 Сохранить (Ctrl+S)'),
+        h('button', {title: 'Сохранить и перезапустить, даже если выключен — для проверки', onclick: async () => {
+          await saveScript(); try { const r = await api('POST', '/api/scripts/run', {name: SC.name}); SCR = r.scripts; SC.err = r.compile.error ? r.compile : null; toast(SC.err ? 'Ошибка запуска' : 'Перезапущен', !!SC.err); render(); } catch (e) { toast(e.message, true); } }}, '▶ Перезапустить'),
+        h('button', {class: 'danger', onclick: async () => { if (!confirm('Удалить скрипт ' + SC.name + '?')) return; try { SCR = (await api('POST', '/api/scripts/delete', {name: SC.name})).scripts; SC = null; SCR.length && await openScript(SCR[0].name, true); render(); } catch (e) { toast(e.message, true); } }}, '🗑')),
+      scriptEditor(),
+      info && info.hooks.length ? h('div', {class: 'row', style: 'margin-top:10px'}, h('span', {class: 'mute'}, 'Слушает:'), info.hooks.map(k => h('span', {class: 'kbd', title: k.kind}, (k.kind === 'at' || k.kind === 'every' ? (k.kind === 'every' ? 'каждые ' : 'в ') : k.kind === 'on' ? 'событие ' : '') + k.what))) : '',
+      h('h3', {style: 'margin-top:14px'}, 'Вывод скрипта'),
+      h('div', {class: 'out'}, info && info.output.length ? info.output.join('\n') : h('span', {class: 'mute'}, 'log(...) и ошибки появятся здесь')),
+      h('div', {class: 'row', style: 'margin-top:8px'}, h('button', {class: 'small', onclick: () => loadScripts()}, '🔄 Обновить')));
+  const ref = h('div', {class: 'card ref'}, h('h3', {}, 'Справка · нажмите, чтобы вставить'),
+    API_REF.map(([sig, desc, snip]) => h('div', {class: 'refi', onclick: () => window._scInsert && window._scInsert(snip)}, h('code', {}, sig), h('small', {}, desc))));
+  return h('div', {},
+    h('div', {class: 'hint'}, 'Скрипты на JavaScript: свои клавиши, комбинации, тайминги и реакции на игру. Клавиши не отбираются у Dota. Каждый скрипт работает отдельно — ошибка или зависание одного не ломает остальные.'),
+    h('div', {class: 'scgrid'},
+      h('div', {class: 'card'}, h('h3', {}, 'Скрипты'), list, h('div', {style: 'margin-top:10px'}, newBtn)),
+      editorCard, ref));
+};
+
+// ---------- тесты ----------
+const TESTS = [
+  ['monitor', '🎧 Наушники', 'Короткий сигнал только вам. Проверяет вывод в наушники.', 'Проверить'],
+  ['mic', '🎤 Микрофон', 'Говорите 3 секунды обычным голосом, как в игре. Покажет громкость, шум, перегруз и подскажет усиление.', 'Записать 3 с'],
+  ['cable', '🔌 Кабель → Dota', 'Пропускает тон через виртуальный кабель и слушает его с другой стороны. Покажет уровень и задержку.', 'Проверить'],
+  ['voice', '🎛 Пресет голоса', 'Запишите фразу — услышите её сначала без эффекта, затем через выбранный пресет.', 'Записать 3 с'],
+  ['team', '👂 Как меня слышит команда', 'Записывает ровно то, что уходит в Dota (голос + эффекты + звуки), и проигрывает вам.', 'Записать 4 с'],
+  ['ptt', '⌨️ Кнопка голосового чата', 'Зажмёт вашу кнопку голосового чата на 1,5 с — в Dota загорится иконка микрофона.', 'Нажать'],
+];
+const TR = {}; let testRunning = null, testPreset = '';
+async function runTest(id) {
+  if (testRunning) return;
+  testRunning = id; TR[id] = null; render();
+  try {
+    TR[id] = await api('POST', '/api/test', {id, sec: id === 'team' ? 4 : 3, preset: testPreset || ST.preset});
+  } catch (e) { TR[id] = {verdict: 'fail', summary: e.message}; }
+  testRunning = null; render();
+}
+function statsLine(s) {
+  if (!s) return '';
+  return h('div', {class: 'stats'},
+    [['Речь', s.speech_db], ['Фон', s.noise_db], ['Пик', s.peak_db]].map(([l, v]) => h('div', {}, h('small', {}, l), h('b', {}, Math.round(v) + ' dB'),
+      h('div', {class: 'meter'}, h('i', {style: `width:${Math.max(0, Math.min(100, (v + 60) / 60 * 100))}%`})))),
+    s.clip_pct > 0 ? h('div', {}, h('small', {}, 'Перегруз'), h('b', {class: s.clip_pct > 0.1 ? 'bad' : ''}, s.clip_pct + '%')) : '');
+}
+pages.test = () => {
+  const cards = TESTS.map(([id, title, desc, btn]) => {
+    const r = TR[id], busy = testRunning === id;
+    return h('div', {class: 'card test ' + (r ? r.verdict : '')},
+      h('div', {class: 'row'}, h('b', {style: 'font-size:15px'}, title), h('div', {class: 'grow'}),
+        r && h('span', {class: 'verdict'}, {ok: '✅', warn: '⚠️', fail: '❌'}[r.verdict] || '')),
+      h('p', {class: 'mute', style: 'margin:6px 0 10px'}, desc),
+      id === 'voice' && h('div', {class: 'sl'}, 'Пресет', h('select', {onchange: e => testPreset = e.target.value}, S.presets.map(p => h('option', {value: p.name, selected: (testPreset || ST.preset) === p.name}, p.name))), ''),
+      h('button', {class: 'primary', disabled: !!testRunning, onclick: () => runTest(id)}, busy ? (id === 'mic' || id === 'voice' || id === 'team' ? '● Запись… говорите' : '⏳ Проверяю…') : btn),
+      r && h('div', {class: 'res'}, h('b', {}, r.summary), statsLine(r.stats),
+        (r.details || []).map(d => h('div', {class: 'mute'}, '• ' + d)),
+        r.ask && h('div', {class: 'hint', style: 'margin:8px 0 0'}, r.ask),
+        r.suggest && r.suggest.mic_gain && h('button', {style: 'margin-top:8px', onclick: () => { edit(c => c.mic_gain = r.suggest.mic_gain); toast('Усиление микрофона: ' + r.suggest.mic_gain); }}, '✔ Применить усиление ' + r.suggest.mic_gain)));
+  });
+  return h('div', {},
+    h('div', {class: 'hint'}, 'Тесты идут по-настоящему через выбранные устройства. Порядок: наушники → микрофон → кабель → «как меня слышит команда». Если в Dota включена активация голосом, тестовый тон может попасть в чат.'),
+    h('div', {class: 'grid'}, cards));
 };
 
 let SETUP = null;
@@ -364,6 +552,7 @@ document.querySelectorAll('#nav button[data-page]').forEach(b => b.addEventListe
   document.querySelectorAll('#nav button').forEach(x => x.classList.remove('active'));
   b.classList.add('active'); page = b.dataset.page; history.replaceState(null, '', '#' + page);
   if (page === 'setup') loadSetup();
+  if (page === 'scripts') loadScripts();
   render();
 }));
 document.getElementById('quitBtn').addEventListener('click', () => { if (confirm('Закрыть VoiceBox? Звуки и голосовые пресеты перестанут работать.')) api('POST', '/api/quit'); });
@@ -387,6 +576,7 @@ function connectEvents() {
   es.addEventListener('log', e => {
     const line = JSON.parse(e.data);
     S && S.logs.push(line);
+    const nm = line.match(/🔔 (.*)$/); if (nm) toast('🔔 ' + nm[1]);
     const el = document.getElementById('log');
     if (el) { const atEnd = el.scrollTop + el.clientHeight >= el.scrollHeight - 30; el.append('\n' + line); if (atEnd) el.scrollTop = el.scrollHeight; }
     if (/Обнаружены изменения|Кнопка голосового чата|VB-Cable установлен/.test(line) && Date.now() - lastSave > 3000 && !pendingCfg) clearTimeout(window._rl), window._rl = setTimeout(() => !document.querySelector('#modal:not(.hidden)') && load(), 600);

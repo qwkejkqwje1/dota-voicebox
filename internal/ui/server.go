@@ -24,6 +24,7 @@ import (
 	"github.com/qwkejkqwje1/dota-voicebox/internal/dsp"
 	"github.com/qwkejkqwje1/dota-voicebox/internal/gsi"
 	"github.com/qwkejkqwje1/dota-voicebox/internal/logbus"
+	"github.com/qwkejkqwje1/dota-voicebox/internal/script"
 	"github.com/qwkejkqwje1/dota-voicebox/internal/sounds"
 	"github.com/qwkejkqwje1/dota-voicebox/internal/winapi"
 )
@@ -77,6 +78,15 @@ func (s *Server) Serve(l net.Listener) error {
 		"POST /api/open":            s.open,
 		"POST /api/quit":            s.quit,
 		"POST /api/preset/test":     s.testPreset,
+		"GET /api/scripts":          s.scriptsList,
+		"GET /api/scripts/code":     s.scriptCode,
+		"PUT /api/scripts":          s.scriptSave,
+		"POST /api/scripts/delete":  s.scriptDelete,
+		"POST /api/scripts/run":     s.scriptRun,
+		"POST /api/scripts/enable":  s.scriptEnable,
+		"POST /api/scripts/check":   s.scriptCheck,
+		"POST /api/test":            s.runTest,
+		"POST /api/clock":           s.setClock,
 	}
 	for pattern, h := range api {
 		h := h
@@ -163,7 +173,7 @@ var gsiEvents = []map[string]string{
 	{"id": gsi.EvLowHP, "label": "Мало HP"}, {"id": gsi.EvLevel6, "label": "6 уровень"},
 	{"id": gsi.EvSmoked, "label": "Под смоком"}, {"id": gsi.EvDay, "label": "Наступил день"},
 	{"id": gsi.EvNight, "label": "Наступила ночь"}, {"id": gsi.EvVictory, "label": "Победа"},
-	{"id": gsi.EvDefeat, "label": "Поражение"},
+	{"id": gsi.EvDefeat, "label": "Поражение"}, {"id": "rosh_killed", "label": "Рошан убит (авто)"},
 }
 
 // events — поток Server-Sent Events: статус 10 раз в секунду + строки журнала.
@@ -408,5 +418,156 @@ func (s *Server) testPreset(r *http.Request) (any, error) {
 		return nil, err
 	}
 	s.Engine.SetChain(c)
+	return nil, nil
+}
+
+// ---------- скрипты ----------
+
+func (s *Server) scriptsList(*http.Request) (any, error) {
+	return map[string]any{"scripts": s.App.Scripts().List()}, nil
+}
+
+func (s *Server) scriptCode(r *http.Request) (any, error) {
+	code, err := s.App.Scripts().Read(r.URL.Query().Get("name"))
+	if err != nil {
+		return nil, err
+	}
+	return map[string]string{"code": code}, nil
+}
+
+type compileInfo struct {
+	Error string `json:"error,omitempty"`
+	Line  int    `json:"line,omitempty"`
+}
+
+func ci(err error) compileInfo {
+	if err == nil {
+		return compileInfo{}
+	}
+	return compileInfo{Error: err.Error(), Line: script.ErrLine(err)}
+}
+
+func (s *Server) scriptSave(r *http.Request) (any, error) {
+	var req struct {
+		Name   string `json:"name"`
+		Code   string `json:"code"`
+		Enable *bool  `json:"enable"`
+	}
+	if err := decode(r, &req); err != nil {
+		return nil, err
+	}
+	m := s.App.Scripts()
+	cerr, err := m.Save(req.Name, req.Code)
+	if err != nil {
+		return nil, err
+	}
+	if req.Enable != nil {
+		if err := s.setEnabled(req.Name, *req.Enable); err != nil {
+			return nil, err
+		}
+	} else {
+		m.Sync(s.App.Config().Scripts)
+	}
+	return map[string]any{"compile": ci(cerr), "scripts": m.List()}, nil
+}
+
+func (s *Server) setEnabled(name string, on bool) error {
+	return s.App.UpdateConfig(func(c *config.Config) {
+		if c.Scripts == nil {
+			c.Scripts = map[string]bool{}
+		}
+		c.Scripts[name] = on
+	})
+}
+
+func (s *Server) scriptEnable(r *http.Request) (any, error) {
+	var req struct {
+		Name string `json:"name"`
+		On   bool   `json:"on"`
+	}
+	if err := decode(r, &req); err != nil {
+		return nil, err
+	}
+	if !script.ValidName(req.Name) {
+		return nil, fmt.Errorf("плохое имя скрипта")
+	}
+	if err := s.setEnabled(req.Name, req.On); err != nil {
+		return nil, err
+	}
+	return map[string]any{"scripts": s.App.Scripts().List()}, nil
+}
+
+func (s *Server) scriptDelete(r *http.Request) (any, error) {
+	var req struct {
+		Name string `json:"name"`
+	}
+	if err := decode(r, &req); err != nil {
+		return nil, err
+	}
+	if err := s.App.Scripts().Delete(req.Name); err != nil {
+		return nil, err
+	}
+	s.App.UpdateConfig(func(c *config.Config) { delete(c.Scripts, req.Name) })
+	return map[string]any{"scripts": s.App.Scripts().List()}, nil
+}
+
+func (s *Server) scriptRun(r *http.Request) (any, error) {
+	var req struct {
+		Name string `json:"name"`
+	}
+	if err := decode(r, &req); err != nil {
+		return nil, err
+	}
+	err := s.App.Scripts().Run(req.Name)
+	return map[string]any{"compile": ci(err), "scripts": s.App.Scripts().List()}, nil
+}
+
+func (s *Server) scriptCheck(r *http.Request) (any, error) {
+	var req struct {
+		Name string `json:"name"`
+		Code string `json:"code"`
+	}
+	if err := decode(r, &req); err != nil {
+		return nil, err
+	}
+	return ci(script.Check(req.Name, req.Code)), nil
+}
+
+// ---------- тесты и время ----------
+
+func (s *Server) runTest(r *http.Request) (any, error) {
+	var req struct {
+		ID     string  `json:"id"`
+		Sec    float64 `json:"sec"`
+		Preset string  `json:"preset"`
+	}
+	if err := decode(r, &req); err != nil {
+		return nil, err
+	}
+	return s.App.RunTest(req.ID, req.Sec, req.Preset)
+}
+
+func (s *Server) setClock(r *http.Request) (any, error) {
+	var req struct {
+		Mode string `json:"mode"` // horn | sync | clear
+		Time string `json:"time"`
+	}
+	if err := decode(r, &req); err != nil {
+		return nil, err
+	}
+	switch req.Mode {
+	case "horn":
+		s.App.SetManualClock(0)
+	case "sync":
+		sec, err := script.ParseTime(req.Time)
+		if err != nil {
+			return nil, err
+		}
+		s.App.SetManualClock(sec)
+	case "clear":
+		s.App.Clock().ClearManual()
+	default:
+		return nil, fmt.Errorf("mode: horn|sync|clear")
+	}
 	return nil, nil
 }

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log"
 
+	"github.com/qwkejkqwje1/dota-voicebox/internal/combo"
 	"github.com/qwkejkqwje1/dota-voicebox/internal/keys"
 	"github.com/qwkejkqwje1/dota-voicebox/internal/sounds"
 )
@@ -38,3 +39,5 @@ func Autostart() bool                   { return false }
 func SetAutostart(bool) error           { return errWin }
 func Alert(title, text string)          { log.Printf("%s: %s", title, text) }
 func SetHighPriority()                  {}
+
+func StartKeyHook(chan<- combo.Event) error { return errWin }

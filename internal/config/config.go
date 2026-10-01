@@ -56,6 +56,7 @@ type Config struct {
 		LowHP   int    `json:"low_hp_percent"`
 	} `json:"gsi"`
 	VoicePresets map[string][]dsp.Spec `json:"voice_presets"`
+	Scripts      map[string]bool       `json:"scripts"`
 	UI           struct {
 		Port               int  `json:"port"`
 		KeepRunningOnClose bool `json:"keep_running_on_close"`
@@ -101,6 +102,9 @@ func Load(path string) (*Config, error) {
 	}
 	if _, ok := probe["events"]; ok {
 		c.Events = nil
+	}
+	if _, ok := probe["scripts"]; ok {
+		c.Scripts = nil
 	}
 	if _, ok := probe["sounds"]; ok {
 		c.Sounds = nil

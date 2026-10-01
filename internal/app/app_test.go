@@ -79,7 +79,7 @@ func mk(clock int) *gsi.State {
 func TestGSITimers(t *testing.T) {
 	a, out := newApp(t)
 	for c := 340; c < 350; c++ {
-		a.OnGSI(mk(c))
+		a.OnGSI(mk(c), nil)
 	}
 	if out.m.Active() {
 		t.Fatal("рано")
@@ -88,7 +88,7 @@ func TestGSITimers(t *testing.T) {
 	if !st.Game.Connected || len(st.Upcoming) == 0 || st.Upcoming[0].ID != "mid_rune_6" || st.Upcoming[0].In != 11 {
 		t.Fatalf("%+v", st)
 	}
-	a.OnGSI(mk(350)) // 6:00 - 10с
+	a.OnGSI(mk(350), nil) // 6:00 - 10с
 	if !out.m.Active() {
 		t.Fatal("нет звука руны на 6:00")
 	}

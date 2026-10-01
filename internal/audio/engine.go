@@ -66,6 +66,8 @@ type Engine struct {
 
 	micGain, ducking, sfxVol, monVol afloat
 	lvMic, lvOut, lvMon              afloat
+	tpOut, tpMon                     afloat
+	rawRec                           atomic.Pointer[recorder]
 
 	// буферы аудиопотока (без аллокаций в колбэке после прогрева)
 	work, sfx, mono2 []float32
@@ -357,6 +359,9 @@ func (e *Engine) onDuplex(out, in []byte, frames uint32) {
 	e.work = grow(e.work, n)
 	e.sfx = grow(e.sfx, n)
 	if mic := f32(in); len(mic) >= n {
+		if r := e.rawRec.Load(); r != nil {
+			r.write(mic[:n])
+		}
 		g := e.micGain.Load()
 		for i := 0; i < n; i++ {
 			e.work[i] = mic[i] * g
@@ -381,6 +386,7 @@ func (e *Engine) onDuplex(out, in []byte, frames uint32) {
 	}
 	softClip(e.work)
 	peak(e.work, &e.lvOut)
+	peak(e.work, &e.tpOut)
 	if e.micMon.Load() {
 		e.micMonBuf.Write(e.work)
 	}
@@ -403,6 +409,7 @@ func (e *Engine) onMonitor(out, _ []byte, frames uint32) {
 	}
 	softClip(e.mono2)
 	peak(e.mono2, &e.lvMon)
+	peak(e.mono2, &e.tpMon)
 	for i := 0; i < n && 2*i+1 < len(o); i++ {
 		o[2*i], o[2*i+1] = e.mono2[i], e.mono2[i]
 	}

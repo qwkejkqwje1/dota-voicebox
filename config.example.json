@@ -34,7 +34,6 @@
   },
 
   "hotkeys": {
-    "Num1":   "sound:siren",
     "Num2":   "sound:wisdom_rune@both",
     "Num3":   "sound:mid_rune_6@both",
     "Num0":   "preset:clean",
@@ -78,6 +77,10 @@
   },
 
   "voice_presets": {},
+
+  "scripts": {
+    "gank_mid": true
+  },
 
   "ui": {
     "port": 3001,

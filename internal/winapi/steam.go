@@ -33,6 +33,10 @@ func GSIConfig(uri, token string) string {
     "map"      "1"
     "player"   "1"
     "hero"     "1"
+    "abilities" "1"
+    "items"    "1"
+    "buildings" "1"
+    "events"   "1"
   }
 }
 `

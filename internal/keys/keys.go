@@ -79,3 +79,20 @@ func Parse(s string) (Combo, error) {
 	}
 	return c, nil
 }
+
+// VK возвращает код клавиши по имени ("Num1", "F9", "Mouse4").
+func VK(name string) (uint32, bool) {
+	v, ok := vk[strings.ToUpper(name)]
+	return v, ok
+}
+
+// Name — обратное преобразование (для журнала и интерфейса).
+func Name(code uint32) string {
+	best := ""
+	for k, v := range vk {
+		if v == code && (best == "" || len(k) > len(best) || (len(k) == len(best) && k < best)) {
+			best = k
+		}
+	}
+	return best
+}

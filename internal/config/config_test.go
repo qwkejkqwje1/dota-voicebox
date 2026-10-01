@@ -13,7 +13,7 @@ func TestDefaultAndOverride(t *testing.T) {
 		t.Fatal(err)
 	}
 	c, err := Load(p)
-	if err != nil || c.Hotkeys["Num1"] != "sound:siren" || len(c.Timers) != 5 {
+	if err != nil || c.Hotkeys["Num2"] != "sound:wisdom_rune@both" || !c.Scripts["gank_mid"] || len(c.Timers) != 5 {
 		t.Fatalf("%v %+v", err, c)
 	}
 	os.WriteFile(p, []byte(`{"ptt":{"key":"B","auto":true},"hotkeys":{"F9":"stop"}}`), 0o644)

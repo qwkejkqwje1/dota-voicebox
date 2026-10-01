@@ -298,6 +298,9 @@ func (a *App) Watchdog() {
 				a.Fix("audio")
 			}
 		}
+		if n%6 == 1 {
+			a.refreshGSIConfig()
+		}
 		if n%3 == 0 {
 			c := a.Config()
 			if !c.PTT.AutoDetect {
@@ -312,4 +315,27 @@ func (a *App) Watchdog() {
 			}
 		}
 	}
+}
+
+// refreshGSIConfig обновляет устаревший cfg GSI (новая версия программы просит больше данных).
+func (a *App) refreshGSIConfig() {
+	c := a.Config()
+	if !c.GSI.Enabled {
+		return
+	}
+	dota, err := winapi.FindDota(winapi.SteamRoot())
+	if err != nil {
+		return
+	}
+	if _, err := os.Stat(winapi.GSIPath(dota)); err != nil {
+		return // не установлен — это решает мастер настройки
+	}
+	if winapi.GSIInstalled(dota, a.gsiURI(c), c.GSI.Token) {
+		return
+	}
+	if _, err := winapi.InstallGSI(dota, a.gsiURI(c), c.GSI.Token); err != nil {
+		log.Printf("GSI: не удалось обновить конфиг: %v", err)
+		return
+	}
+	log.Print("GSI: конфиг обновлён (больше данных для таймеров и скриптов). Если Dota запущена — перезапустите её")
 }

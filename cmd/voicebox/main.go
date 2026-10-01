@@ -15,6 +15,7 @@ import (
 
 	"github.com/qwkejkqwje1/dota-voicebox/internal/app"
 	"github.com/qwkejkqwje1/dota-voicebox/internal/audio"
+	"github.com/qwkejkqwje1/dota-voicebox/internal/combo"
 	"github.com/qwkejkqwje1/dota-voicebox/internal/config"
 	"github.com/qwkejkqwje1/dota-voicebox/internal/gsi"
 	"github.com/qwkejkqwje1/dota-voicebox/internal/logbus"
@@ -122,6 +123,17 @@ func main() {
 		fatal("Ошибка конфига: %v", err)
 	}
 	go a.PTTLoop()
+	go a.ClockLoop()
+	keyCh := make(chan combo.Event, 512)
+	if err := winapi.StartKeyHook(keyCh); err != nil {
+		log.Printf("Перехват клавиш для скриптов недоступен: %v", err)
+	} else {
+		go func() {
+			for ev := range keyCh {
+				a.KeyEvent(ev)
+			}
+		}()
+	}
 	go a.WatchConfig()
 	go a.Watchdog()
 	if !cfg.SetupDone {

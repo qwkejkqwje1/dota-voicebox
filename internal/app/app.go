@@ -15,10 +15,13 @@ import (
 	"time"
 
 	"github.com/qwkejkqwje1/dota-voicebox/internal/audio"
+	"github.com/qwkejkqwje1/dota-voicebox/internal/combo"
 	"github.com/qwkejkqwje1/dota-voicebox/internal/config"
 	"github.com/qwkejkqwje1/dota-voicebox/internal/dsp"
+	"github.com/qwkejkqwje1/dota-voicebox/internal/gameclock"
 	"github.com/qwkejkqwje1/dota-voicebox/internal/gsi"
 	"github.com/qwkejkqwje1/dota-voicebox/internal/keys"
+	"github.com/qwkejkqwje1/dota-voicebox/internal/script"
 	"github.com/qwkejkqwje1/dota-voicebox/internal/sounds"
 	"github.com/qwkejkqwje1/dota-voicebox/internal/timers"
 	"github.com/qwkejkqwje1/dota-voicebox/internal/winapi"
@@ -55,10 +58,16 @@ type App struct {
 	actions map[string]string
 	pttVK   uint32
 	devOpts *audio.Options
+	tts     sounds.TTSFunc
 
 	gsiMu     sync.Mutex
 	prevState *gsi.State
+	rawState  []byte
 	lastGSI   time.Time
+	seenEv    map[string]bool
+
+	clock   *gameclock.Clock
+	scripts *script.Manager
 
 	pttOwned  atomic.Bool
 	pending   atomic.Int32
@@ -71,8 +80,18 @@ type App struct {
 }
 
 func New(configPath string, out Output) *App {
-	return &App{ConfigPath: configPath, BaseDir: filepath.Dir(configPath), out: out, timers: timers.New(nil)}
+	a := &App{ConfigPath: configPath, BaseDir: filepath.Dir(configPath), out: out, timers: timers.New(nil),
+		clock: gameclock.New(nil), seenEv: map[string]bool{}}
+	a.scripts = script.NewManager(filepath.Join(a.BaseDir, "scripts"), &scriptHost{a})
+	a.scripts.InstallDefaults()
+	return a
 }
+
+// Scripts — менеджер пользовательских скриптов.
+func (a *App) Scripts() *script.Manager { return a.scripts }
+
+// Clock — игровое время.
+func (a *App) Clock() *gameclock.Clock { return a.clock }
 
 // Config возвращает копию текущего конфига.
 func (a *App) Config() *config.Config {
@@ -168,11 +187,13 @@ func (a *App) Reload() error {
 	a.mu.Lock()
 	first := a.cfg == nil
 	a.cfg, a.lib, a.presets, a.order, a.actions, a.pttVK, a.combos = cfg, lib, presets, order, actions, pttVK, combos
+	a.tts = tts
 	a.timers.SetTimers(cfg.Timers)
 	a.mu.Unlock()
 
 	a.out.SetMix(cfg.MicGain, cfg.Ducking, or1(cfg.SfxVolume), cfg.MonitorVolume, cfg.FxOnSounds)
 	a.applyHotkeys()
+	a.scripts.Sync(cfg.Scripts)
 
 	// устройства: перезапуск движка только если выбор изменился
 	opts := audio.Options{MicDevice: cfg.Devices.Mic, VoiceOut: cfg.Devices.VoiceOut, MonitorOut: cfg.Devices.Monitor}
@@ -199,6 +220,8 @@ func (a *App) Reload() error {
 	return nil
 }
 
+func (a *App) logf(f string, args ...any) { log.Printf(f, args...) }
+
 func or1(v float64) float64 {
 	if v == 0 {
 		return 1
@@ -224,8 +247,12 @@ func (a *App) applyHotkeys() {
 // PauseHotkeys временно снимает глобальные клавиши (пока в интерфейсе назначают новую).
 func (a *App) PauseHotkeys(on bool) {
 	a.hkPaused.Store(on)
+	a.scripts.SetPaused(on)
 	a.applyHotkeys()
 }
+
+// KeyEvent — нажатие из глобального перехвата клавиатуры (для скриптов).
+func (a *App) KeyEvent(ev combo.Event) { a.scripts.Key(ev) }
 
 // AttachHotkeys включает глобальные горячие клавиши.
 func (a *App) AttachHotkeys() {
@@ -261,6 +288,18 @@ func (a *App) Do(act string) {
 		if err := a.Reload(); err != nil {
 			log.Printf("Ошибка конфига: %v", err)
 		}
+	case act == "clock_horn":
+		a.SetManualClock(0)
+	case strings.HasPrefix(act, "clock_sync:"):
+		sec, err := script.ParseTime(strings.TrimPrefix(act, "clock_sync:"))
+		if err != nil {
+			log.Printf("clock_sync: %v", err)
+			return
+		}
+		a.SetManualClock(sec)
+	case act == "clock_clear":
+		a.clock.ClearManual()
+		log.Print("Ручное время сброшено")
 	case act == "ui":
 		if a.OnShowUI != nil {
 			a.OnShowUI()
@@ -271,27 +310,37 @@ func (a *App) Do(act string) {
 }
 
 // Play играет звук по ссылке "id" или "id@both|voice|monitor".
-func (a *App) Play(ref string) {
+func (a *App) Play(ref string) { a.PlayOpts(ref, 1) }
+
+// PlayOpts — Play с множителем громкости.
+func (a *App) PlayOpts(ref string, volume float64) error {
 	id, busStr, hasBus := strings.Cut(ref, "@")
 	a.mu.Lock()
-	lib, cfg := a.lib, a.cfg
+	lib := a.lib
 	a.mu.Unlock()
 	s := lib.Get(id)
 	if s == nil {
 		log.Printf("Звук %q не найден", id)
-		return
-	}
-	if !a.out.Running() {
-		log.Printf("Звук %s не сыгран: аудио не запущено (см. «Настройка»)", id)
-		return
-	}
-	clip, ok := s.Pick()
-	if !ok {
-		return // кулдаун
+		return fmt.Errorf("звук %q не найден", id)
 	}
 	bus := s.Bus
 	if hasBus {
 		bus = sounds.ParseBus(busStr)
+	}
+	clip, ok := s.Pick()
+	if !ok {
+		return nil // кулдаун
+	}
+	return a.playClip(s.ID, clip, float32(float64(s.Volume)*volume), s.Mode, bus)
+}
+
+func (a *App) playClip(id string, clip sounds.Clip, vol float32, mode string, bus sounds.Bus) error {
+	a.mu.Lock()
+	cfg := a.cfg
+	a.mu.Unlock()
+	if !a.out.Running() {
+		log.Printf("Звук %s не сыгран: аудио не запущено (см. «Настройка»)", id)
+		return fmt.Errorf("аудио не запущено")
 	}
 	toVoice := bus == sounds.BusBoth || bus == sounds.BusVoice
 	toMon := bus == sounds.BusBoth || bus == sounds.BusMonitor
@@ -305,10 +354,10 @@ func (a *App) Play(ref string) {
 	}
 	add := func() {
 		if toVoice {
-			a.out.Voice().Add(s.ID, clip, s.Volume, s.Mode)
+			a.out.Voice().Add(id, clip, vol, mode)
 		}
 		if toMon {
-			a.out.Monitor().Add(s.ID, clip, s.Volume, s.Mode)
+			a.out.Monitor().Add(id, clip, vol, mode)
 		}
 	}
 	if delay > 0 {
@@ -318,8 +367,9 @@ func (a *App) Play(ref string) {
 		add()
 	}
 	if id != "beep" {
-		log.Printf("♪ %s → %s", s.ID, map[sounds.Bus]string{sounds.BusBoth: "войс + вы", sounds.BusVoice: "войс", sounds.BusMonitor: "только вы"}[bus])
+		log.Printf("♪ %s → %s", id, map[sounds.Bus]string{sounds.BusBoth: "войс + вы", sounds.BusVoice: "войс", sounds.BusMonitor: "только вы"}[bus])
 	}
+	return nil
 }
 
 func (a *App) pressPTT() bool {
@@ -434,8 +484,9 @@ func fmtClock(s int) string {
 
 // RoshKilled — отметка убийства Рошана: аегис 5:00, окно респауна 8:00–11:00.
 func (a *App) RoshKilled() {
+	snap := a.clock.Now()
+	clock, ok := snap.Clock, snap.OK
 	a.gsiMu.Lock()
-	clock, ok := a.timers.Clock()
 	if ok {
 		a.mu.Lock()
 		r := a.cfg.Rosh
@@ -454,7 +505,7 @@ func (a *App) RoshKilled() {
 }
 
 // OnGSI обрабатывает пакет состояния от Dota 2.
-func (a *App) OnGSI(st *gsi.State) {
+func (a *App) OnGSI(st *gsi.State, raw []byte) {
 	if st.Map == nil {
 		a.gsiMu.Lock()
 		a.lastGSI = time.Now()
@@ -465,31 +516,90 @@ func (a *App) OnGSI(st *gsi.State) {
 	events, lowHP := a.cfg.Events, a.cfg.GSI.LowHP
 	a.mu.Unlock()
 
+	running := st.Map.GameState == gsi.InProgress || st.Map.GameState == gsi.PreGame
+	newGame := a.clock.OnGSI(st.Map.ClockTime, running, st.Map.Paused, st.Map.MatchID)
+
 	a.gsiMu.Lock()
 	if a.lastGSI.IsZero() {
 		log.Print("GSI: Dota 2 подключена")
 	}
 	a.lastGSI = time.Now()
-	if a.prevState != nil && a.prevState.Map != nil && a.prevState.Map.MatchID != st.Map.MatchID {
+	if newGame || (a.prevState != nil && a.prevState.Map != nil && a.prevState.Map.MatchID != st.Map.MatchID) {
 		a.timers.Reset()
-	}
-	var fires []timers.Fire
-	if st.Map.GameState == gsi.InProgress || st.Map.GameState == gsi.PreGame {
-		fires = a.timers.Update(st.Map.ClockTime)
+		a.seenEv = map[string]bool{}
+		newGame = true
 	}
 	evs := gsi.Diff(a.prevState, st, lowHP)
+	// события провайдера "events": Рошан убит и т.п. (приходят повторно — дедуп по типу+времени)
+	var roshKilled bool
+	for _, e := range st.Events {
+		key := fmt.Sprintf("%s@%d", e.EventType, e.GameTime)
+		if a.seenEv[key] {
+			continue
+		}
+		a.seenEv[key] = true
+		if a.prevState == nil { // старые события из первого пакета не повторяем
+			continue
+		}
+		evs = append(evs, e.EventType)
+		if e.EventType == "roshan_killed" {
+			roshKilled = true
+		}
+	}
 	a.prevState = st
+	a.rawState = raw
 	a.gsiMu.Unlock()
 
-	for _, f := range fires {
-		log.Printf("⏱ %s (событие в %s, сейчас %s)", f.TimerID, fmtClock(f.EventAt), fmtClock(st.Map.ClockTime))
-		a.Play(f.Sound)
+	if newGame {
+		a.scripts.Event("new_game", nil)
+	}
+	a.tickClock()
+	if roshKilled {
+		log.Print("GSI: Рошан убит — запускаю таймеры автоматически")
+		a.RoshKilled()
+		evs = append(evs, "rosh_killed")
 	}
 	for _, ev := range evs {
 		if ref := events[ev]; ref != "" {
 			a.Play(ref)
 		}
+		a.scripts.Event(ev, nil)
 	}
+	a.scripts.Event("state", nil)
+}
+
+// SetManualClock — задать игровое время вручную (если GSI нет): 0 = горн сейчас.
+func (a *App) SetManualClock(sec int) {
+	a.gsiMu.Lock()
+	a.timers.Reset()
+	a.gsiMu.Unlock()
+	a.clock.SetManual(float64(sec))
+	a.scripts.Event("new_game", nil)
+	log.Printf("⏱ Игровое время задано вручную: %s (используется, пока нет данных от Dota)", fmtClock(sec))
+}
+
+// ClockLoop — двигает таймеры и скрипты по сглаженному игровому времени.
+func (a *App) ClockLoop() {
+	t := time.NewTicker(200 * time.Millisecond)
+	defer t.Stop()
+	for range t.C {
+		a.tickClock()
+	}
+}
+
+func (a *App) tickClock() {
+	snap := a.clock.Now()
+	if !snap.OK {
+		return
+	}
+	a.gsiMu.Lock()
+	fires := a.timers.Update(snap.Clock)
+	a.gsiMu.Unlock()
+	for _, f := range fires {
+		log.Printf("⏱ %s (событие в %s, сейчас %s)", f.TimerID, fmtClock(f.EventAt), fmtClock(snap.Clock))
+		a.Play(f.Sound)
+	}
+	a.scripts.Clock(snap)
 }
 
 // Status — состояние для интерфейса.
@@ -504,13 +614,14 @@ type Status struct {
 }
 
 type GameStatus struct {
-	Connected bool   `json:"connected"`
-	HasClock  bool   `json:"has_clock"`
-	Clock     int    `json:"clock"`
-	State     string `json:"state"`
-	Hero      string `json:"hero,omitempty"`
-	Paused    bool   `json:"paused"`
-	Daytime   bool   `json:"daytime"`
+	ClockInfo gameclock.Snapshot `json:"clock_info"`
+	Connected bool               `json:"connected"`
+	HasClock  bool               `json:"has_clock"`
+	Clock     int                `json:"clock"`
+	State     string             `json:"state"`
+	Hero      string             `json:"hero,omitempty"`
+	Paused    bool               `json:"paused"`
+	Daytime   bool               `json:"daytime"`
 }
 
 func (a *App) Status() Status {
@@ -520,18 +631,21 @@ func (a *App) Status() Status {
 	s.MicMonitor = a.out.MicMonitor()
 	s.Audio = a.out.Status()
 	s.PTTHeld = a.pttOwned.Load()
+	snap := a.clock.Now()
+	s.Game.ClockInfo = snap
 	a.gsiMu.Lock()
 	s.Game.Connected = !a.lastGSI.IsZero() && time.Since(a.lastGSI) < 40*time.Second
 	if st := a.prevState; st != nil && st.Map != nil && s.Game.Connected {
-		s.Game.Clock, s.Game.HasClock = st.Map.ClockTime, true
 		s.Game.State = strings.TrimPrefix(st.Map.GameState, "DOTA_GAMERULES_STATE_")
 		s.Game.Paused, s.Game.Daytime = st.Map.Paused, st.Map.Daytime
 		if st.Hero != nil {
 			s.Game.Hero = strings.TrimPrefix(st.Hero.Name, "npc_dota_hero_")
 		}
-		if st.Map.GameState == gsi.InProgress || st.Map.GameState == gsi.PreGame {
-			s.Upcoming = a.timers.Upcoming()
-		}
+	}
+	if snap.OK {
+		s.Game.Clock, s.Game.HasClock = snap.Clock, true
+		s.Game.Paused = snap.Paused
+		s.Upcoming = a.timers.Upcoming()
 	}
 	a.gsiMu.Unlock()
 	return s
@@ -559,11 +673,12 @@ func (a *App) computeStamp() string {
 	if st, err := os.Stat(a.ConfigPath); err == nil {
 		fmt.Fprintf(&b, "%d;", st.ModTime().UnixNano())
 	}
-	dir := a.SoundsDir()
-	entries, _ := os.ReadDir(dir)
-	for _, e := range entries {
-		if info, err := e.Info(); err == nil {
-			fmt.Fprintf(&b, "%s:%d:%d;", e.Name(), info.Size(), info.ModTime().UnixNano())
+	for _, dir := range []string{a.SoundsDir(), a.scripts.Dir} {
+		entries, _ := os.ReadDir(dir)
+		for _, e := range entries {
+			if info, err := e.Info(); err == nil {
+				fmt.Fprintf(&b, "%s:%d:%d;", e.Name(), info.Size(), info.ModTime().UnixNano())
+			}
 		}
 	}
 	return b.String()

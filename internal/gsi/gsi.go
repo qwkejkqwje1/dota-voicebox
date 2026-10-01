@@ -40,6 +40,14 @@ type State struct {
 		HealthPercent int    `json:"health_percent"`
 		Smoked        bool   `json:"smoked"`
 	} `json:"hero"`
+	// Events — провайдер "events" (roshan_killed, aegis_picked_up, bounty_rune_pickup…).
+	Events []Event `json:"events"`
+}
+
+type Event struct {
+	GameTime  int    `json:"game_time"`
+	EventType string `json:"event_type"`
+	Team      string `json:"killed_by_team,omitempty"`
 }
 
 const InProgress = "DOTA_GAMERULES_STATE_GAME_IN_PROGRESS"
@@ -135,7 +143,7 @@ func Diff(prev, cur *State, lowHP int) []string {
 type Server struct {
 	Addr    string
 	Token   string
-	OnState func(*State)
+	OnState func(st *State, raw []byte)
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -152,7 +160,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if s.Token != "" && (st.Auth == nil || st.Auth.Token != s.Token) {
 		return
 	}
-	s.OnState(&st)
+	s.OnState(&st, body)
 }
 
 func (s *Server) Run() error {
