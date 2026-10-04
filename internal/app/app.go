@@ -40,6 +40,13 @@ type Output interface {
 	Status() audio.Status
 }
 
+// StripOutput — пульт: полоса микрофона и дополнительные источники (есть у audio.Engine).
+type StripOutput interface {
+	SetMicStrip(mute bool, gateDB float64)
+	SetSources([]audio.SourceConfig)
+	Strips() []audio.StripStatus
+}
+
 type App struct {
 	ConfigPath string
 	BaseDir    string
@@ -75,6 +82,8 @@ type App struct {
 	stamp     string
 	hkPaused  atomic.Bool
 
+	// UpdateStatus — состояние автообновления для интерфейса.
+	UpdateStatus func() any
 	// OnShowUI — вызывается действием "ui" (открыть окно).
 	OnShowUI func()
 }
@@ -192,6 +201,10 @@ func (a *App) Reload() error {
 	a.mu.Unlock()
 
 	a.out.SetMix(cfg.MicGain, cfg.Ducking, or1(cfg.SfxVolume), cfg.MonitorVolume, cfg.FxOnSounds)
+	if m, ok := a.out.(StripOutput); ok {
+		m.SetMicStrip(cfg.Mic.Mute, cfg.Mic.GateDB)
+		m.SetSources(cfg.Sources)
+	}
 	a.applyHotkeys()
 	a.scripts.Sync(cfg.Scripts)
 
@@ -288,6 +301,18 @@ func (a *App) Do(act string) {
 		if err := a.Reload(); err != nil {
 			log.Printf("Ошибка конфига: %v", err)
 		}
+	case act == "mic_mute":
+		a.UpdateConfig(func(c *config.Config) { c.Mic.Mute = !c.Mic.Mute })
+		log.Printf("Микрофон: %s", map[bool]string{true: "ВЫКЛЮЧЕН (mute)", false: "включён"}[a.Config().Mic.Mute])
+	case strings.HasPrefix(act, "source_mute:"):
+		id := strings.TrimPrefix(act, "source_mute:")
+		a.UpdateConfig(func(c *config.Config) {
+			for i := range c.Sources {
+				if c.Sources[i].ID == id {
+					c.Sources[i].Mute = !c.Sources[i].Mute
+				}
+			}
+		})
 	case act == "clock_horn":
 		a.SetManualClock(0)
 	case strings.HasPrefix(act, "clock_sync:"):
@@ -604,13 +629,16 @@ func (a *App) tickClock() {
 
 // Status — состояние для интерфейса.
 type Status struct {
-	Preset     string            `json:"preset"`
-	MicMonitor bool              `json:"mic_monitor"`
-	Audio      audio.Status      `json:"audio"`
-	PTTKey     string            `json:"ptt_key"`
-	PTTHeld    bool              `json:"ptt_held"`
-	Game       GameStatus        `json:"game"`
-	Upcoming   []timers.Upcoming `json:"upcoming"`
+	Preset     string              `json:"preset"`
+	MicMonitor bool                `json:"mic_monitor"`
+	Audio      audio.Status        `json:"audio"`
+	PTTKey     string              `json:"ptt_key"`
+	PTTHeld    bool                `json:"ptt_held"`
+	Game       GameStatus          `json:"game"`
+	Upcoming   []timers.Upcoming   `json:"upcoming"`
+	Strips     []audio.StripStatus `json:"strips"`
+	MicMute    bool                `json:"mic_mute"`
+	Update     any                 `json:"update,omitempty"`
 }
 
 type GameStatus struct {
@@ -629,6 +657,15 @@ func (a *App) Status() Status {
 	s := Status{Preset: a.preset, PTTKey: a.cfg.PTT.Key}
 	a.mu.Unlock()
 	s.MicMonitor = a.out.MicMonitor()
+	if m, ok := a.out.(StripOutput); ok {
+		s.Strips = m.Strips()
+	}
+	if a.UpdateStatus != nil {
+		s.Update = a.UpdateStatus()
+	}
+	a.mu.Lock()
+	s.MicMute = a.cfg.Mic.Mute
+	a.mu.Unlock()
 	s.Audio = a.out.Status()
 	s.PTTHeld = a.pttOwned.Load()
 	snap := a.clock.Now()

@@ -69,12 +69,28 @@ type Engine struct {
 	tpOut, tpMon                     afloat
 	rawRec                           atomic.Pointer[recorder]
 
+	// дополнительные источники (полосы пульта)
+	src            srcManager
+	srcList        atomic.Pointer[srcState]
+	srcTmp, srcMon []float32
+	monTmp         []float32
+
+	// полоса микрофона: mute и шумовой гейт
+	micMute  atomic.Bool
+	gateThr  afloat // линейный порог, 0 = выкл
+	gateGain float32
+	gateHold int
+	micEnv   float32
+	vizPre   tap // микрофон до эффектов
+	vizPost  tap // эфир после эффектов
+
 	// буферы аудиопотока (без аллокаций в колбэке после прогрева)
 	work, sfx, mono2 []float32
 }
 
 func NewEngine() *Engine {
-	e := &Engine{micMonBuf: newRing(sounds.SampleRate / 2)}
+	e := &Engine{micMonBuf: newRing(sounds.SampleRate / 2), gateGain: 1}
+	e.src.monRing = newDrift(sounds.SampleRate / 50)
 	e.chain.Store(&dsp.Chain{Name: "clean"})
 	e.micGain.Store(1)
 	e.ducking.Store(0.35)
@@ -274,6 +290,11 @@ func (e *Engine) Start(opt Options) error {
 		e.status.Error = err.Error()
 		e.closeLocked()
 	}
+	e.mu.Unlock()
+	if err == nil {
+		e.syncSources()
+	}
+	e.mu.Lock() // для defer
 	return err
 }
 
@@ -363,10 +384,15 @@ func (e *Engine) onDuplex(out, in []byte, frames uint32) {
 			r.write(mic[:n])
 		}
 		g := e.micGain.Load()
+		if e.micMute.Load() {
+			g = 0
+		}
 		for i := 0; i < n; i++ {
 			e.work[i] = mic[i] * g
 		}
 		peak(e.work, &e.lvMic)
+		e.gate(e.work)
+		e.vizPre.write(e.work)
 	}
 	chain := e.chain.Load()
 	playing := e.VoiceMix.Render(e.sfx)
@@ -384,7 +410,9 @@ func (e *Engine) onDuplex(out, in []byte, frames uint32) {
 			}
 		}
 	}
+	e.mixSources(e.work, e.micEnv)
 	softClip(e.work)
+	e.vizPost.write(e.work)
 	peak(e.work, &e.lvOut)
 	peak(e.work, &e.tpOut)
 	if e.micMon.Load() {
@@ -400,6 +428,13 @@ func (e *Engine) onMonitor(out, _ []byte, frames uint32) {
 	o := f32(out)
 	e.mono2 = grow(e.mono2, n)
 	e.MonitorMix.Render(e.mono2)
+	if st := e.srcList.Load(); st != nil && len(st.list) > 0 {
+		e.monTmp = growNoClear(e.monTmp, n)
+		e.src.monRing.Pull(e.monTmp)
+		for i := 0; i < n; i++ {
+			e.mono2[i] += e.monTmp[i]
+		}
+	}
 	if e.micMon.Load() {
 		e.micMonBuf.ReadAdd(e.mono2)
 	}
@@ -423,6 +458,7 @@ func (e *Engine) Close() {
 
 func (e *Engine) closeLocked() {
 	e.running.Store(false)
+	e.closeSources()
 	if e.duplex != nil {
 		e.duplex.Uninit()
 		e.duplex = nil

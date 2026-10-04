@@ -292,6 +292,9 @@ func (a *App) Watchdog() {
 	n := 0
 	for range t.C {
 		n++
+		if m, ok := a.out.(interface{ RetrySources() }); ok && n%2 == 0 {
+			m.RetrySources()
+		}
 		if !a.out.Running() {
 			_, p, err := audio.Devices()
 			if err == nil && audio.FindCable(p) != "" {

@@ -21,6 +21,7 @@ import (
 	"github.com/qwkejkqwje1/dota-voicebox/internal/logbus"
 	"github.com/qwkejkqwje1/dota-voicebox/internal/sounds"
 	"github.com/qwkejkqwje1/dota-voicebox/internal/ui"
+	"github.com/qwkejkqwje1/dota-voicebox/internal/update"
 	"github.com/qwkejkqwje1/dota-voicebox/internal/winapi"
 )
 
@@ -39,6 +40,9 @@ func main() {
 	exportDir := flag.String("export-sounds", "", "сохранить встроенные звуки в WAV в указанную папку и выйти")
 	background := flag.Bool("background", false, "запуск без окна (автозагрузка)")
 	showVer := flag.Bool("version", false, "версия")
+	guardExe := flag.String("update-guard", "", "служебный: сторож установки обновления")
+	postUpdate := flag.Bool("post-update", false, "служебный: первый запуск после обновления")
+	waitRestart := flag.Bool("wait-restart", false, "служебный: дождаться выхода прошлой копии")
 	flag.Parse()
 	log.SetFlags(log.Ltime)
 
@@ -79,6 +83,20 @@ func main() {
 		port = 3001
 	}
 	addr := fmt.Sprintf("127.0.0.1:%d", port)
+
+	restartArgs := []string{"-config", abs}
+	if *background {
+		restartArgs = append(restartArgs, "-background")
+	}
+	if *guardExe != "" {
+		update.Guard(*guardExe, restartArgs, func() bool { return pingExisting(addr) })
+		return
+	}
+	if *waitRestart || *postUpdate {
+		for i := 0; i < 100 && pingExisting(addr); i++ {
+			time.Sleep(200 * time.Millisecond)
+		}
+	}
 
 	// уже запущена? — показать окно существующей копии и выйти
 	if pingExisting(addr) {
@@ -165,13 +183,21 @@ func main() {
 	}
 	a.OnShowUI = show
 
-	srv := &ui.Server{App: a, Engine: eng, Logs: logs, Token: ui.NewToken(), Addr: addr, OnShow: show, OnQuit: quit}
+	upd := update.New(version, exe)
+	a.UpdateStatus = func() any { return upd.Status() }
+	srv := &ui.Server{App: a, Engine: eng, Logs: logs, Token: ui.NewToken(), Addr: addr, OnShow: show, OnQuit: quit,
+		Updater: upd, RestartArgs: restartArgs}
 	l, err := srv.Listen()
 	if err != nil {
 		fatal("Порт интерфейса %s занят: %v", addr, err)
 	}
 	go srv.Serve(l)
 	log.Printf("Интерфейс: http://%s/", addr)
+	if *postUpdate {
+		log.Printf("Обновлено до %s", version)
+		update.MarkHealthy(exe)
+	}
+	go updateLoop(a, upd, restartArgs, quit)
 
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, os.Interrupt)
@@ -203,6 +229,36 @@ func main() {
 			}
 			log.Print("Окно закрыто — VoiceBox работает в фоне (Ctrl+Alt+V или повторный запуск — открыть)")
 		}
+	}
+}
+
+// updateLoop — проверка обновлений при запуске и раз в 6 часов; автоустановка вне матча.
+func updateLoop(a *app.App, u *update.Updater, args []string, quit func()) {
+	time.Sleep(20 * time.Second)
+	for {
+		c := a.Config()
+		if c.Update.AutoCheck {
+			if _, err := u.Check(); err != nil {
+				log.Printf("Обновления: %v", err)
+			} else if st := u.Status(); st.Available && st.Latest != c.Update.Skip {
+				log.Printf("Доступна новая версия %s (у вас %s)", st.Latest, st.Current)
+				if c.Update.AutoInstall {
+					// не обновляемся посреди матча: ждём, пока игра не идёт
+					for a.Game().Clock.OK {
+						time.Sleep(time.Minute)
+					}
+					if err := u.Download(); err == nil {
+						if err := u.Install(args); err == nil {
+							quit()
+							return
+						} else {
+							log.Printf("Обновление: %v", err)
+						}
+					}
+				}
+			}
+		}
+		time.Sleep(6 * time.Hour)
 	}
 }
 

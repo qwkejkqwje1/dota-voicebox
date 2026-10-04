@@ -136,36 +136,214 @@ function renderPills() {
 // ---------- страницы ----------
 const pages = {};
 
+// ---------- пульт ----------
+const DOTA_CHECKS = ['dota', 'dota_input', 'gsi', 'launch', 'ptt', 'gsi_live'];
+const SLV = {};          // уровни полос (пики)
+function meterEl(id, vertical) { return h('div', {class: 'meter' + (vertical ? ' v' : '')}, h('i', {id: 'm_' + id})); }
+function strip({id, title, sub, icon, children, cls}) {
+  return h('div', {class: 'strip ' + (cls || '')}, h('div', {class: 'sthead'}, h('span', {class: 'sticon'}, icon), h('div', {style: 'min-width:0'}, h('b', {}, title), h('small', {}, sub || ''))),
+    meterEl(id), children);
+}
+function knob(label, value, min, max, step, onchange, fmtv) {
+  const out = h('span', {class: 'mute'}, fmtv ? fmtv(value) : (+value).toFixed(2));
+  return h('div', {class: 'knob'}, h('span', {}, label),
+    h('input', {type: 'range', min, max, step, value, oninput: e => { out.textContent = fmtv ? fmtv(+e.target.value) : (+e.target.value).toFixed(2); onchange(+e.target.value); }}), out);
+}
+const gateFmt = v => v >= 0 ? 'выкл' : v + ' dB';
 pages.home = () => {
   const c = S.config;
+  const st = ST.strips || [];
+  const micStrip = strip({id: 'mic_in', icon: '🎤', title: 'Микрофон', sub: (ST.audio.mic || 'не запущен') + ' → пресет «' + ST.preset + '»', cls: c.mic.mute ? 'muted' : '', children: [
+    knob('Усиление', c.mic_gain, 0, 3, 0.05, v => edit(x => x.mic_gain = v, {debounce: 300, rerender: false})),
+    knob('Гейт', c.mic.gate_db || 0, -80, 0, 1, v => { edit(x => x.mic.gate_db = v, {debounce: 300, rerender: false}); viz.gate = v; }, gateFmt),
+    h('div', {class: 'row'},
+      h('button', {class: 'small ' + (c.mic.mute ? 'on' : ''), onclick: () => api('POST', '/api/action', {action: 'mic_mute'}).then(load)}, c.mic.mute ? '🔇 Включить' : '🔇 Mute'),
+      h('button', {class: 'small ' + (ST.mic_monitor ? 'on' : ''), onclick: () => api('POST', '/api/action', {action: 'mic_monitor'})}, '🎧 Слышать себя'),
+      h('select', {class: 'small', onchange: e => api('POST', '/api/action', {action: 'preset:' + e.target.value})}, S.presets.map(p => h('option', {value: p.name, selected: ST.preset === p.name}, '🎛 ' + p.name))))]});
+  const srcStrips = (c.sources || []).map((src, i) => {
+    const s = st.find(x => x.id === src.id) || {};
+    const set = (k, debounce) => v => edit(x => x.sources[i][k] = v, {debounce: debounce ? 300 : 0, rerender: !debounce});
+    return strip({id: 'src_' + src.id, icon: src.kind === 'loopback' ? '🔁' : '🎚', title: src.label || src.id,
+      sub: s.running ? s.device + (src.channel ? ' · вход ' + src.channel : '') : '⚠ ' + (s.error || 'не запущен'), cls: src.mute ? 'muted' : '', children: [
+        knob('Громкость', src.gain, 0, 3, 0.05, set('gain', 1)),
+        knob('В эфир', src.to_air, 0, 1.5, 0.05, set('to_air', 1)),
+        knob('В наушники', src.to_mon, 0, 1.5, 0.05, set('to_mon', 1)),
+        knob('Тише, когда говорю', src.duck || 0, 0, 1, 0.05, set('duck', 1)),
+        h('div', {class: 'row'},
+          h('button', {class: 'small ' + (src.mute ? 'on' : ''), onclick: () => edit(x => x.sources[i].mute = !x.sources[i].mute)}, src.mute ? '🔇 Включить' : '🔇 Mute'),
+          s.xruns ? h('span', {class: 'mute', title: 'компенсация разницы часов устройств / опустошения буфера'}, `⏱ ${((s.ratio - 1) * 1e6).toFixed(0)} ppm · ${s.xruns} xrun`) : '',
+          h('div', {class: 'grow'}),
+          h('button', {class: 'small danger', onclick: () => confirm('Удалить источник?') && edit(x => x.sources.splice(i, 1))}, '🗑'))]});
+  });
+  const kind = h('select', {}, h('option', {value: 'input'}, '🎚 Вход (микрофон / аудиоинтерфейс)'), h('option', {value: 'loopback'}, '🔁 Звук устройства (музыка, браузер, игра)'));
+  const dev = h('select', {});
+  const fillDev = () => dev.replaceChildren(...(kind.value === 'loopback' ? S.devices.playback : S.devices.capture || []).filter(d => !/cable|voicemeeter/i.test(d.name)).map(d => h('option', {value: d.name}, d.name)));
+  kind.onchange = fillDev; fillDev();
+  const chan = h('input', {type: 'number', min: 0, max: 32, value: 0, title: '0 — все каналы; 1, 2… — конкретный вход аудиоинтерфейса'});
+  const addCard = h('div', {class: 'strip add'}, h('b', {}, '＋ Источник'), kind, dev, h('div', {class: 'row'}, 'Канал', chan, h('span', {class: 'mute'}, '0 = все')),
+    h('button', {class: 'primary', onclick: () => {
+      const label = (dev.value || '').replace(/\s*\(.*\)$/, '').slice(0, 30) || 'Источник';
+      edit(x => (x.sources = x.sources || []).push({id: 'src' + Date.now().toString(36), label, kind: kind.value, device: dev.value, channel: +chan.value, gain: 1, to_air: kind.value === 'loopback' ? 0.6 : 1, to_mon: kind.value === 'loopback' ? 0 : 0, duck: kind.value === 'loopback' ? 0.5 : 0}));
+      toast('Источник добавлен: ' + label);
+    }}, 'Добавить'));
+  const bus = (id, icon, title, dev, vol) => h('div', {class: 'strip bus'}, h('div', {class: 'sthead'}, h('span', {class: 'sticon'}, icon), h('div', {}, h('b', {}, title), h('small', {}, dev || '—'))), meterEl(id), vol);
+  return h('div', {},
+    h('div', {class: 'mixer'}, micStrip, srcStrips, addCard,
+      h('div', {class: 'busses'},
+        bus('voice_out', '📡', 'Эфир', (ST.audio.voice_out || 'кабель не найден') + ' → Discord / Dota / OBS',
+          [knob('Звуки в эфир', c.sfx_volume, 0, 2, 0.05, v => edit(x => x.sfx_volume = v, {debounce: 300, rerender: false})),
+            knob('Голос во время звука', c.ducking, 0, 1, 0.05, v => edit(x => x.ducking = v, {debounce: 300, rerender: false}))]),
+        bus('monitor', '🎧', 'Мониторинг', ST.audio.monitor,
+          knob('Громкость', c.monitor_volume, 0, 1.5, 0.05, v => edit(x => x.monitor_volume = v, {debounce: 300, rerender: false}))))),
+    vizCard());
+}
+
+// ---------- визуализация ----------
+const viz = {ws: null, post: false, gate: 0, frames: [], spectro: null, canvas: null};
+function vizCard() {
+  viz.gate = S.config.mic.gate_db || 0;
+  const cv = h('canvas', {id: 'vizc', width: 1200, height: 300});
+  viz.canvas = cv;
+  const mode = h('div', {class: 'seg'},
+    h('button', {class: viz.post ? '' : 'on', onclick: e => { viz.post = false; viz.ws && viz.ws.readyState === 1 && viz.ws.send('pre'); e.target.parentNode.childNodes.forEach(b => b.classList.toggle('on', b === e.target)); }}, 'До эффектов'),
+    h('button', {class: viz.post ? 'on' : '', onclick: e => { viz.post = true; viz.ws && viz.ws.readyState === 1 && viz.ws.send('post'); e.target.parentNode.childNodes.forEach(b => b.classList.toggle('on', b === e.target)); }}, 'В эфире (после)'));
+  // перетаскивание порога гейта по осциллограмме
+  let drag = false;
+  const setGate = ev => {
+    const r = cv.getBoundingClientRect(); const y = (ev.clientY - r.top) / r.height; // 0..1 в области осциллограммы (верх 45%)
+    const amp = Math.max(0.0001, Math.min(1, Math.abs(0.5 - y / 0.45 * 0.45 / 0.45 * 0.5) * 2));
+    const yy = Math.min(0.45, Math.max(0, y)) / 0.45; const a = Math.abs(yy - 0.5) * 2;
+    let db = Math.round(20 * Math.log10(Math.max(a, 0.0001)));
+    if (db > -3) db = 0; if (db < -80) db = -80;
+    viz.gate = db; edit(x => x.mic.gate_db = db, {debounce: 300, rerender: false});
+    void amp;
+  };
+  cv.addEventListener('mousedown', e => { if ((e.offsetY / cv.clientHeight) < 0.45) { drag = true; setGate(e); } });
+  window.addEventListener('mousemove', e => drag && setGate(e));
+  window.addEventListener('mouseup', () => drag = false);
+  setTimeout(vizStart);
+  return h('div', {class: 'card', style: 'margin-top:16px'},
+    h('div', {class: 'row', style: 'margin-bottom:8px'}, h('h3', {style: 'margin:0'}, 'Голос'), mode, h('span', {id: 'gateInd', class: 'pill'}, 'гейт'), h('div', {class: 'grow'}),
+      h('span', {class: 'mute', style: 'font-size:12px'}, 'Осциллограмма · спектр · водопад. Тяните мышью по осциллограмме — порог гейта')), cv);
+}
+function vizStart() {
+  if (viz.ws && viz.ws.readyState <= 1) return;
+  const ws = new WebSocket(`ws://${location.host}/api/viz?t=${encodeURIComponent(TOKEN)}`);
+  ws.binaryType = 'arraybuffer'; viz.ws = ws;
+  ws.onopen = () => { ws.send(viz.post ? 'post' : 'pre'); ws.send('fps:30'); };
+  ws.onmessage = e => { if (page === 'home') vizDraw(new Uint8Array(e.data)); };
+  ws.onclose = () => { viz.ws = null; if (page === 'home') setTimeout(vizStart, 1500); };
+}
+function vizStop() { if (viz.ws) { const w = viz.ws; viz.ws = null; w.onclose = null; w.close(); } }
+function vizDraw(d) {
+  const cv = document.getElementById('vizc'); if (!cv) return;
+  const W = cv.clientWidth | 0, H = cv.clientHeight | 0;
+  if (cv.width !== W || cv.height !== H) { cv.width = W; cv.height = H; viz.spectro = null; }
+  const g = cv.getContext('2d');
+  const cols = 256, bands = 96, gateOpen = d[1] === 1;
+  const wave = d.subarray(2, 2 + cols * 2), spec = d.subarray(2 + cols * 2, 2 + cols * 2 + bands), pk = d[2 + cols * 2 + bands];
+  const oh = H * 0.45, sh = H * 0.27, wy = oh + sh;
+  g.fillStyle = '#0b0d11'; g.fillRect(0, 0, W, wy);
+  // сетка
+  g.strokeStyle = '#1c2029'; g.lineWidth = 1; g.beginPath(); g.moveTo(0, oh / 2); g.lineTo(W, oh / 2); g.stroke();
+  // порог гейта
+  if (viz.gate < 0) {
+    const a = Math.pow(10, viz.gate / 20) * oh / 2;
+    g.fillStyle = 'rgba(232,179,58,.08)'; g.fillRect(0, oh / 2 - a, W, a * 2);
+    g.strokeStyle = 'rgba(232,179,58,.7)'; g.setLineDash([4, 4]); g.beginPath(); g.moveTo(0, oh / 2 - a); g.lineTo(W, oh / 2 - a); g.moveTo(0, oh / 2 + a); g.lineTo(W, oh / 2 + a); g.stroke(); g.setLineDash([]);
+    g.fillStyle = '#e8b33a'; g.font = '11px Consolas'; g.fillText('гейт ' + viz.gate + ' dB', 6, Math.max(12, oh / 2 - a - 4));
+  }
+  // осциллограмма
+  const sx = W / cols;
+  const grad = g.createLinearGradient(0, 0, 0, oh); grad.addColorStop(0, '#ff6b4a'); grad.addColorStop(0.5, '#3fbf6f'); grad.addColorStop(1, '#ff6b4a');
+  g.fillStyle = gateOpen ? grad : '#3a4150';
+  for (let i = 0; i < cols; i++) {
+    const mn = (wave[i * 2] << 24 >> 24) / 127, mx = (wave[i * 2 + 1] << 24 >> 24) / 127;
+    const y1 = oh / 2 - mx * oh / 2, y2 = oh / 2 - mn * oh / 2;
+    g.fillRect(i * sx, y1, Math.max(1, sx - 0.5), Math.max(1, y2 - y1));
+  }
+  // спектр
+  const bw = W / bands;
+  for (let b = 0; b < bands; b++) {
+    const v = spec[b] / 255, bh = v * (sh - 14);
+    g.fillStyle = `hsl(${200 - v * 200},80%,${35 + v * 25}%)`;
+    g.fillRect(b * bw + 1, oh + sh - bh - 12, bw - 2, bh);
+  }
+  g.fillStyle = '#5b6375'; g.font = '10px Consolas';
+  [['100', 0.15], ['500', 0.42], ['1k', 0.54], ['4k', 0.77], ['10k', 0.92]].forEach(([t, x]) => g.fillText(t, x * W, oh + sh - 1));
+  // водопад (спектрограмма): сдвиг вниз на 1 строку
+  const wh = H - wy;
+  if (!viz.spectro) viz.spectro = g.createImageData(W, Math.max(1, wh | 0));
+  const img = viz.spectro, row = W * 4;
+  img.data.copyWithin(row, 0, img.data.length - row);
+  for (let x = 0; x < W; x++) {
+    const v = spec[Math.min(bands - 1, (x / W * bands) | 0)] / 255;
+    const i = x * 4, r = v > 0.6 ? 255 : v * 400, gg = v > 0.3 ? Math.min(255, (v - 0.3) * 500) : 0, bb = v < 0.5 ? v * 400 : Math.max(0, 255 - (v - 0.5) * 600);
+    img.data[i] = r; img.data[i + 1] = gg; img.data[i + 2] = bb; img.data[i + 3] = 255;
+  }
+  g.putImageData(img, 0, wy);
+  // пиковый уровень и индикатор гейта
+  g.fillStyle = pk > 240 ? '#e0453a' : '#8b93a3'; g.font = '12px Consolas';
+  g.fillText('пик ' + (pk ? (20 * Math.log10(pk / 255)).toFixed(0) : '-∞') + ' dB', W - 90, 14);
+  const gi = document.getElementById('gateInd');
+  if (gi) { gi.textContent = viz.gate < 0 ? (gateOpen ? '● гейт открыт' : '○ гейт закрыт') : 'гейт выключен'; gi.className = 'pill ' + (viz.gate < 0 ? (gateOpen ? 'ok' : '') : ''); }
+}
+
+// ---------- саундборд ----------
+pages.board = () => {
   const presetBtns = S.presets.map(p => h('button', {class: 'tile' + (ST.preset === p.name ? ' on' : ''), onclick: () => api('POST', '/api/action', {action: 'preset:' + p.name})},
     h('b', {}, p.name), h('small', {}, p.desc || 'свой пресет'), ...kbd(hotkeysFor('preset:' + p.name))));
   const rank = s => (hotkeysFor('sound:' + s.id).length ? 0 : 2) + (s.label ? 0 : 1);
-  const quick = S.sounds.filter(s => hotkeysFor('sound:' + s.id).length || s.label || s.source !== 'builtin').sort((a, b) => rank(a) - rank(b));
-  const soundBtns = quick.map(s => h('button', {class: 'tile', onclick: () => api('POST', '/api/action', {action: 'sound:' + s.id})},
+  const all = S.sounds.slice().sort((a, b) => rank(a) - rank(b));
+  const soundBtns = all.map(s => h('button', {class: 'tile pad', onclick: () => api('POST', '/api/action', {action: 'sound:' + s.id})},
     h('b', {}, s.label || s.id), h('small', {}, busName[s.bus] + ' · ' + s.duration + ' с'), ...kbd(hotkeysFor('sound:' + s.id))));
-  const slider = (label, key, min, max, step) => h('div', {class: 'sl'}, h('span', {}, label),
-    h('input', {type: 'range', min, max, step, value: c[key], oninput: e => { e.target.nextSibling.textContent = (+e.target.value).toFixed(2); edit(x => x[key] = +e.target.value, {debounce: 300, rerender: false}); }}),
-    h('span', {class: 'mute'}, (+c[key]).toFixed(2)));
   return h('div', {class: 'grid'},
-    h('div', {class: 'card'}, h('h3', {}, 'Голос'), h('div', {class: 'btns'}, presetBtns),
-      h('div', {class: 'row', style: 'margin-top:12px'},
-        h('button', {class: ST.mic_monitor ? 'on' : '', onclick: () => api('POST', '/api/action', {action: 'mic_monitor'})}, '🎧 Слышать себя'),
-        h('span', {class: 'mute'}, 'включите, чтобы подобрать пресет'))),
-    h('div', {class: 'card'}, h('h3', {}, 'Игра'), h('div', {id: 'game'}), h('div', {class: 'row', style: 'margin-top:10px'},
-      h('button', {onclick: () => api('POST', '/api/action', {action: 'rosh'})}, '🐉 Рошан убит'), ...kbd(hotkeysFor('rosh')),
-      h('button', {title: 'Если Dota не подключена: нажмите в момент горна — таймеры и скрипты пойдут по ручному времени', onclick: () => api('POST', '/api/clock', {mode: 'horn'}).then(() => toast('Отсчёт с 0:00'))}, '📯 Горн 0:00'), ...kbd(hotkeysFor('clock_horn')),
-      h('button', {title: 'Задать текущее игровое время вручную', onclick: () => { const t = prompt('Сколько сейчас на игровых часах? (например 12:34)'); if (t) api('POST', '/api/clock', {mode: 'sync', time: t}).then(() => toast('Время: ' + t)).catch(e => toast(e.message, true)); }}, '🕐 Синхр.'))),
-    h('div', {class: 'card'}, h('h3', {}, 'Звуки'), h('div', {class: 'btns'}, soundBtns.length ? soundBtns : h('span', {class: 'mute'}, 'Добавьте звуки во вкладке «Звуки»')),
-      h('div', {class: 'row', style: 'margin-top:12px'}, h('button', {onclick: () => api('POST', '/api/action', {action: 'stop'})}, '⏹ Стоп всё'), ...kbd(hotkeysFor('stop')))),
-    h('div', {class: 'card'}, h('h3', {}, 'Уровни и громкость'),
-      ['mic_in:🎤 Микрофон', 'voice_out:📡 В войс', 'monitor:🎧 В наушники'].map(x => { const [k, l] = x.split(':');
-        return h('div', {class: 'sl'}, h('span', {}, l), h('div', {class: 'meter'}, h('i', {id: 'm_' + k})), h('span', {})); }),
-      slider('Усиление микрофона', 'mic_gain', 0, 3, 0.05),
-      slider('Голос во время звука', 'ducking', 0, 1, 0.05),
-      slider('Громкость звуков', 'sfx_volume', 0, 2, 0.05),
-      slider('Громкость в наушниках', 'monitor_volume', 0, 1.5, 0.05)));
+    h('div', {class: 'card', style: 'grid-column:1/-1'}, h('div', {class: 'row', style: 'margin-bottom:10px'}, h('h3', {style: 'margin:0'}, 'Звуки'), h('div', {class: 'grow'}),
+      h('button', {onclick: () => api('POST', '/api/action', {action: 'stop'})}, '⏹ Стоп всё'), ...kbd(hotkeysFor('stop')), h('button', {onclick: () => go('sounds')}, '＋ Добавить звуки')),
+      h('div', {class: 'btns'}, soundBtns)),
+    h('div', {class: 'card', style: 'grid-column:1/-1'}, h('h3', {}, 'Голос'), h('div', {class: 'btns'}, presetBtns)));
 };
+
+// ---------- интеграции ----------
+let integ = 'dota';
+pages.integrations = () => {
+  const tabs = h('div', {class: 'seg', style: 'margin-bottom:14px'}, [['dota', '🎮 Dota 2'], ['discord', '💬 Discord']].map(([id, l]) =>
+    h('button', {class: integ === id ? 'on' : '', onclick: () => { integ = id; render(); }}, l)));
+  return h('div', {}, tabs, integ === 'dota' ? dotaPage() : discordPage());
+};
+function checkRows(filter) {
+  if (!SETUP) { loadSetup(); return [h('p', {class: 'mute'}, 'Проверяю…')]; }
+  return SETUP.checks.filter(filter).map(ch => h('div', {class: 'check'}, h('span', {class: 'ic'}, ch.ok ? '✅' : (ch.fix ? '⚠️' : (ch.id === 'gsi_live' ? '⏳' : '❌'))),
+    h('div', {}, h('b', {}, ch.title), h('small', {}, ch.detail), ch.manual && h('small', {class: 'warn'}, ch.manual)),
+    ch.fix && !ch.ok ? h('button', {class: 'primary small', onclick: () => fix(ch.fix)}, ch.fix_label) : h('span')));
+}
+function dotaPage() {
+  return h('div', {},
+    h('div', {class: 'grid'},
+      h('div', {class: 'card'}, h('h3', {}, 'Игра'), h('div', {id: 'game'}), h('div', {class: 'row', style: 'margin-top:10px'},
+        h('button', {onclick: () => api('POST', '/api/action', {action: 'rosh'})}, '🐉 Рошан убит'), ...kbd(hotkeysFor('rosh')),
+        h('button', {title: 'Если Dota не подключена: нажмите в момент горна — таймеры и скрипты пойдут по ручному времени', onclick: () => api('POST', '/api/clock', {mode: 'horn'}).then(() => toast('Отсчёт с 0:00'))}, '📯 Горн 0:00'), ...kbd(hotkeysFor('clock_horn')),
+        h('button', {onclick: () => { const t = prompt('Сколько сейчас на игровых часах? (например 12:34)'); if (t) api('POST', '/api/clock', {mode: 'sync', time: t}).then(() => toast('Время: ' + t)).catch(e => toast(e.message, true)); }}, '🕐 Синхр.'))),
+      h('div', {class: 'card'}, h('h3', {}, 'Настройка Dota 2'), checkRows(c => DOTA_CHECKS.includes(c.id)),
+        h('div', {class: 'row', style: 'margin-top:10px'}, h('button', {onclick: loadSetup}, '🔄 Проверить снова'), h('button', {onclick: () => go('scripts')}, '⚡ Скрипт «Ганк на миде»')))),
+    h('div', {style: 'margin-top:16px'}, timersContent()));
+}
+function discordPage() {
+  const cable = (S.devices.capture || []).find(d => /cable output/i.test(d.name));
+  const step = (n, title, text, extra) => h('div', {class: 'check'}, h('span', {class: 'ic'}, n), h('div', {}, h('b', {}, title), h('small', {}, text)), extra || h('span'));
+  return h('div', {class: 'grid'},
+    h('div', {class: 'card'}, h('h3', {}, 'Discord — настройка за минуту'),
+      step('1', 'Устройство ввода: ' + (cable ? cable.name : 'CABLE Output'), 'Discord → Настройки → Голос и видео → «Устройство ввода». Так Discord услышит ваш голос с эффектами и звуки.',
+        h('button', {class: 'primary small', onclick: () => api('POST', '/api/open', {what: 'discord_voice'}).catch(e => toast(e.message, true))}, 'Открыть настройки')),
+      step('2', 'Устройство вывода: ваши наушники', 'Не выбирайте CABLE Input — иначе собеседники услышат сами себя.'),
+      step('3', 'Шумоподавление Discord (Krisp) — выключить', 'Если у вас включён гейт или пресет с обработкой: Krisp режет эффекты и звуки саундборда. Эхоподавление тоже лучше выключить.'),
+      step('4', 'Чувствительность ввода — вручную', 'Отключите «Автоматически определять» и поставьте порог около −50 dB, иначе тихие звуки обрежутся.'),
+      step('5', 'Режим рации (по желанию)', 'Если в Discord включена «Рация», задайте ту же клавишу в «Настройка → Кнопка голосового чата» — VoiceBox будет нажимать её сам, когда играет звук.'),
+      h('div', {class: 'row', style: 'margin-top:12px'}, h('button', {onclick: () => { go('test'); }}, '🩺 Проверить: «Как меня слышит команда»'))),
+    h('div', {class: 'card'}, h('h3', {}, 'Другие программы'),
+      h('p', {class: 'mute'}, 'Принцип тот же для любой программы: микрофон = ', h('b', {}, cable ? cable.name : 'CABLE Output'), '.'),
+      h('table', {}, [['TeamSpeak', 'Настройки → Захват → Устройство захвата'], ['Telegram', 'Настройки → Звонки → Микрофон'], ['OBS', 'Источник «Захват входного аудиопотока» → CABLE Output'], ['CS2', 'Windows → Звук → устройство ввода по умолчанию (игра берёт системное)'], ['Dota 2', 'вкладка «Dota 2» — настраивается автоматически']].map(([a, b]) => h('tr', {}, h('td', {}, h('b', {}, a)), h('td', {class: 'mute'}, b))))));
+}
 
 function renderGame() {
   const el = document.getElementById('game'); if (!el || !ST) return;
@@ -229,7 +407,7 @@ pages.sounds = () => {
       h('tr', {}, ['Звук', 'Куда', 'Громкость', 'Кулдаун', 'Повтор', 'Клавиша', ''].map(t => h('th', {}, t))), rows)));
 };
 
-pages.timers = () => {
+function timersContent() {
   const c = S.config;
   const rows = (c.timers || []).map((t, i) => h('tr', {},
     h('td', {}, h('label', {class: 'sw'}, h('input', {type: 'checkbox', checked: !t.disabled, onchange: e => edit(x => x.timers[i].disabled = !e.target.checked)}))),
@@ -288,7 +466,7 @@ pages.voice = () => {
 function actionOptions(sel) {
   const opts = [['Звуки', S.sounds.flatMap(s => [['sound:' + s.id, '🔊 ' + (s.label || s.id)], ['sound:' + s.id + '@monitor', '🎧 ' + (s.label || s.id) + ' (только мне)']])],
     ['Голос', [...S.presets.map(p => ['preset:' + p.name, '🎙 ' + p.name]), ['preset:next', '🎙 следующий пресет'], ['preset:prev', '🎙 предыдущий пресет']]],
-    ['Прочее', [['rosh', '🐉 Рошан убит'], ['clock_horn', '📯 горн 0:00 (ручное время)'], ['stop', '⏹ стоп всё'], ['mic_monitor', '🎧 слышать себя'], ['reload', '🔄 перечитать конфиг'], ['ui', '🪟 открыть окно']]]];
+    ['Прочее', [['rosh', '🐉 Рошан убит'], ['clock_horn', '📯 горн 0:00 (ручное время)'], ['stop', '⏹ стоп всё'], ['mic_monitor', '🎧 слышать себя'], ['mic_mute', '🔇 микрофон вкл/выкл'], ['reload', '🔄 перечитать конфиг'], ['ui', '🪟 открыть окно']]]];
   return opts.map(([g, items]) => h('optgroup', {label: g}, items.map(([v, l]) => h('option', {value: v, selected: v === sel}, l))));
 }
 pages.keys = () => {
@@ -487,7 +665,7 @@ pages.test = () => {
 };
 
 let SETUP = null;
-async function loadSetup() { try { SETUP = await api('GET', '/api/setup'); } catch (e) { toast(e.message, true); } if (page === 'setup') render(); updateBadge(); }
+async function loadSetup() { try { SETUP = await api('GET', '/api/setup'); } catch (e) { toast(e.message, true); } if (page === 'setup' || page === 'integrations') render(); updateBadge(); }
 function updateBadge() { document.getElementById('setupBadge').classList.toggle('hidden', !SETUP || SETUP.all_ok); }
 async function fix(id) {
   if (id === 'launch' && SETUP.checks.find(c => c.id === 'launch').detail.includes('перезапущен') && !confirm('Steam будет закрыт и запущен заново. Продолжить?')) return;
@@ -497,7 +675,7 @@ async function fix(id) {
 pages.setup = () => {
   const c = S.config;
   if (!SETUP) { loadSetup(); return h('p', {class: 'mute'}, 'Проверяю…'); }
-  const checks = SETUP.checks.map(ch => h('div', {class: 'check'}, h('span', {class: 'ic'}, ch.ok ? '✅' : (ch.fix ? '⚠️' : (ch.id === 'gsi_live' ? '⏳' : '❌'))),
+  const checks = SETUP.checks.filter(ch => !DOTA_CHECKS.includes(ch.id)).map(ch => h('div', {class: 'check'}, h('span', {class: 'ic'}, ch.ok ? '✅' : (ch.fix ? '⚠️' : (ch.id === 'gsi_live' ? '⏳' : '❌'))),
     h('div', {}, h('b', {}, ch.title), h('small', {}, ch.detail), ch.manual && h('small', {class: 'warn'}, ch.manual)),
     ch.fix && !ch.ok ? h('button', {class: 'primary small', onclick: () => fix(ch.fix)}, ch.fix_label) : h('span')));
   const devSel = (key, list, autoLabel) => h('select', {onchange: e => edit(x => x.devices[key] = e.target.value)},
@@ -529,8 +707,41 @@ pages.setup = () => {
       num('Мало HP, порог', () => c.gsi.low_hp_percent, (x, v) => x.gsi.low_hp_percent = v, '%'),
       h('div', {class: 'row', style: 'margin-top:10px'},
         h('button', {onclick: () => api('POST', '/api/open', {what: 'config'})}, '📂 Папка программы'),
-        h('button', {onclick: () => api('POST', '/api/open', {what: 'repo'})}, 'GitHub'))));
+        h('button', {onclick: () => api('POST', '/api/open', {what: 'repo'})}, 'GitHub'))),
+    updateCard(), backupsCard());
 };
+
+// ---------- обновления и бэкапы ----------
+let UPD = null, BK = null;
+const UPD_STATE = {idle: 'Ещё не проверялось', checking: 'Проверяю…', uptodate: '✅ У вас последняя версия', available: '⬆ Доступна новая версия', downloading: '⬇ Скачиваю…', ready: 'Готово к установке', error: '⚠ Ошибка'};
+async function updAct(path, msg) {
+  try { toast(msg); UPD = await api('POST', path); } catch (e) { toast(e.message, true); }
+  if (page === 'setup') render();
+}
+function updateCard() {
+  const c = S.config, u = UPD || (ST && ST.update) || {};
+  if (!UPD) api('GET', '/api/update').then(r => { UPD = r; if (page === 'setup') render(); }).catch(() => {});
+  const upd = c.update || {};
+  return h('div', {class: 'card'}, h('h3', {}, 'Обновления'),
+    h('p', {}, 'Версия: ', h('b', {}, S.version), u.latest ? ['  ·  последняя: ', h('b', {class: u.available ? 'warn' : 'ok'}, u.latest)] : ''),
+    u.state && h('p', {class: 'mute'}, UPD_STATE[u.state] || u.state, u.state === 'downloading' && u.progress ? ' ' + Math.round(u.progress * 100) + '%' : ''), u.error && h('p', {class: 'bad'}, u.error),
+    u.notes && h('div', {class: 'out', style: 'max-height:120px'}, u.notes),
+    h('div', {class: 'row', style: 'margin:10px 0'},
+      h('button', {onclick: () => updAct('/api/update/check', 'Проверяю…')}, '🔄 Проверить'),
+      u.available && h('button', {class: 'primary', onclick: () => confirm(`Установить ${u.latest}? Программа перезапустится.`) && updAct('/api/update/install', 'Скачиваю…')}, '⬇ Обновить до ' + u.latest),
+      u.can_rollback && u.previous && h('button', {onclick: () => confirm(`Вернуть версию ${u.previous}?`) && updAct('/api/update/rollback', 'Откатываю…')}, '↩ Откатить на ' + u.previous)),
+    h('label', {class: 'sw'}, h('input', {type: 'checkbox', checked: upd.auto_check !== false, onchange: e => edit(x => (x.update = x.update || {}).auto_check = e.target.checked)}), 'Проверять обновления автоматически'),
+    h('label', {class: 'sw'}, h('input', {type: 'checkbox', checked: !!upd.auto_install, onchange: e => edit(x => (x.update = x.update || {}).auto_install = e.target.checked)}), 'Устанавливать сами (не во время матча)'),
+    h('p', {class: 'mute', style: 'font-size:12px'}, 'Обновления проверяются по цифровой подписи. Если новая версия не запустится — программа сама вернёт предыдущую.'));
+}
+function backupsCard() {
+  if (!BK) { BK = []; api('GET', '/api/backups').then(r => { BK = r.backups || []; if (page === 'setup') render(); }).catch(() => {}); }
+  return h('div', {class: 'card'}, h('h3', {}, 'Резервные копии настроек'),
+    BK.length ? h('table', {}, BK.map(b => { const n = b.name || b; return h('tr', {}, h('td', {}, n.replace(/^config-|\.json$/g, '')),
+      h('td', {style: 'text-align:right'}, h('button', {class: 'small', onclick: async () => { if (!confirm('Восстановить настройки из ' + n + '?')) return;
+        try { await api('POST', '/api/backups/restore', {name: n}); toast('Настройки восстановлены'); BK = null; await load(); } catch (e) { toast(e.message, true); } }}, 'Восстановить'))); }))
+      : h('p', {class: 'mute'}, 'Копий пока нет — они создаются при каждом сохранении (хранятся 5 последних).'));
+}
 
 pages.log = () => {
   const el = h('div', {id: 'log'}, (S.logs || []).join('\n'));
@@ -553,6 +764,7 @@ document.querySelectorAll('#nav button[data-page]').forEach(b => b.addEventListe
   b.classList.add('active'); page = b.dataset.page; history.replaceState(null, '', '#' + page);
   if (page === 'setup') loadSetup();
   if (page === 'scripts') loadScripts();
+  if (page !== 'home') vizStop();
   render();
 }));
 document.getElementById('quitBtn').addEventListener('click', () => { if (confirm('Закрыть VoiceBox? Звуки и голосовые пресеты перестанут работать.')) api('POST', '/api/quit'); });
@@ -562,6 +774,11 @@ function connectEvents() {
   const es = new EventSource('/api/events?t=' + encodeURIComponent(TOKEN));
   es.addEventListener('levels', e => {
     LV = JSON.parse(e.data);
+    for (const [id, v] of Object.entries(LV.strips || {})) {
+      SLV[id] = Math.max(v, (SLV[id] || 0) * 0.85);
+      const m = document.getElementById('m_src_' + id);
+      if (m) m.style.width = Math.min(100, Math.sqrt(SLV[id]) * 100) + '%';
+    }
     for (const k in peaks) {
       peaks[k] = Math.max(LV[k], peaks[k] * 0.85);
       const m = document.getElementById('m_' + k);
@@ -583,6 +800,6 @@ function connectEvents() {
   });
   es.onerror = () => { document.getElementById('pills').replaceChildren(h('span', {class: 'pill bad'}, 'Нет связи с программой…')); };
 }
-function go(p) { const b = document.querySelector(`[data-page=${p}]`); if (b) b.click(); }
+function go(p) { if (p === 'timers') p = 'integrations'; const b = document.querySelector(`[data-page=${p}]`); if (b) b.click(); }
 load().then(() => { connectEvents(); loadSetup(); const hp = location.hash.slice(1); if (hp) go(hp); else if (!S.config.setup_done) go('setup'); })
   .catch(e => document.getElementById('page').replaceChildren(h('p', {class: 'bad'}, 'Ошибка: ' + e.message)));

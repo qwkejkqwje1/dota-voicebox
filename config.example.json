@@ -1,4 +1,5 @@
 {
+  "version": 2,
   "devices": {
     "mic": "",
     "voice_out": "",
@@ -87,5 +88,9 @@
     "keep_running_on_close": false,
     "open_on_start": true
   },
-  "setup_done": false
+  "setup_done": false,
+
+  "mic": { "mute": false, "gate_db": 0 },
+  "sources": [],
+  "update": { "auto_check": true, "auto_install": true }
 }

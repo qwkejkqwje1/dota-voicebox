@@ -26,6 +26,7 @@ import (
 	"github.com/qwkejkqwje1/dota-voicebox/internal/logbus"
 	"github.com/qwkejkqwje1/dota-voicebox/internal/script"
 	"github.com/qwkejkqwje1/dota-voicebox/internal/sounds"
+	"github.com/qwkejkqwje1/dota-voicebox/internal/update"
 	"github.com/qwkejkqwje1/dota-voicebox/internal/winapi"
 )
 
@@ -40,6 +41,9 @@ type Server struct {
 	Addr   string
 	OnShow func()
 	OnQuit func()
+
+	Updater     *update.Updater
+	RestartArgs []string
 }
 
 func NewToken() string {
@@ -87,6 +91,14 @@ func (s *Server) Serve(l net.Listener) error {
 		"POST /api/scripts/check":   s.scriptCheck,
 		"POST /api/test":            s.runTest,
 		"POST /api/clock":           s.setClock,
+		"GET /api/update":           func(*http.Request) (any, error) { return s.Updater.Status(), nil },
+		"POST /api/update/check":    s.updateCheck,
+		"POST /api/update/install":  s.updateInstall,
+		"POST /api/update/rollback": s.updateRollback,
+		"GET /api/backups": func(*http.Request) (any, error) {
+			return map[string]any{"backups": config.Backups(s.App.ConfigPath)}, nil
+		},
+		"POST /api/backups/restore": s.restoreBackup,
 	}
 	for pattern, h := range api {
 		h := h
@@ -109,6 +121,7 @@ func (s *Server) Serve(l net.Listener) error {
 		})
 	}
 	mux.HandleFunc("GET /api/events", s.events)
+	mux.HandleFunc("GET /api/viz", s.viz)
 	srv := &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 	return srv.Serve(l)
 }
@@ -206,7 +219,7 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 			fl.Flush()
 		case <-tick.C:
 			lv := s.Engine.Levels()
-			send("levels", lv)
+			send("levels", map[string]any{"mic_in": lv.MicIn, "voice_out": lv.VoiceOut, "monitor": lv.Monitor, "strips": s.Engine.StripLevels()})
 			if n%5 == 0 { // статус — 2 раза в секунду
 				send("status", s.App.Status())
 			}
@@ -393,6 +406,8 @@ func (s *Server) open(r *http.Request) (any, error) {
 		return nil, winapi.OpenURL("https://vb-audio.com/Cable/")
 	case "repo":
 		return nil, winapi.OpenURL("https://github.com/qwkejkqwje1/dota-voicebox")
+	case "discord_voice":
+		return nil, winapi.OpenURL("discord://-/settings/voice")
 	}
 	return nil, fmt.Errorf("неизвестно: %s", req.What)
 }
@@ -570,4 +585,63 @@ func (s *Server) setClock(r *http.Request) (any, error) {
 		return nil, fmt.Errorf("mode: horn|sync|clear")
 	}
 	return nil, nil
+}
+
+// ---------- обновления ----------
+
+func (s *Server) updateCheck(*http.Request) (any, error) {
+	s.Updater.Check()
+	return s.Updater.Status(), nil
+}
+
+func (s *Server) updateInstall(*http.Request) (any, error) {
+	st := s.Updater.Status()
+	if st.State != "ready" {
+		if !st.Available {
+			if _, err := s.Updater.Check(); err != nil {
+				return nil, err
+			}
+			if !s.Updater.Status().Available {
+				return nil, fmt.Errorf("у вас последняя версия")
+			}
+		}
+		if err := s.Updater.Download(); err != nil {
+			return nil, err
+		}
+	}
+	if err := s.Updater.Install(s.RestartArgs); err != nil {
+		return nil, err
+	}
+	if s.OnQuit != nil {
+		go func() { time.Sleep(300 * time.Millisecond); s.OnQuit() }()
+	}
+	return s.Updater.Status(), nil
+}
+
+func (s *Server) updateRollback(*http.Request) (any, error) {
+	if err := s.Updater.Rollback(s.RestartArgs); err != nil {
+		return nil, err
+	}
+	log.Print("Откат на прошлую версию, перезапуск…")
+	if s.OnQuit != nil {
+		go func() { time.Sleep(300 * time.Millisecond); s.OnQuit() }()
+	}
+	return nil, nil
+}
+
+func (s *Server) restoreBackup(r *http.Request) (any, error) {
+	var req struct {
+		Name string `json:"name"`
+	}
+	if err := decode(r, &req); err != nil {
+		return nil, err
+	}
+	if err := config.Restore(s.App.ConfigPath, req.Name); err != nil {
+		return nil, err
+	}
+	if err := s.App.Reload(); err != nil {
+		return nil, err
+	}
+	log.Printf("Конфиг восстановлен из копии %s", req.Name)
+	return s.state(r)
 }
