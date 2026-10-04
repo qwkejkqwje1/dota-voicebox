@@ -4,7 +4,6 @@ let S = null;              // полное состояние (/api/state)
 let ST = null;             // живой статус
 let LV = {mic_in:0, voice_out:0, monitor:0};
 let page = 'home';
-const peaks = {mic_in:0, voice_out:0, monitor:0};
 
 window.addEventListener('error', e => toast('Ошибка интерфейса: ' + e.message, true));
 window.addEventListener('unhandledrejection', e => toast('Ошибка интерфейса: ' + (e.reason && e.reason.message || e.reason), true));
@@ -138,8 +137,27 @@ const pages = {};
 
 // ---------- пульт ----------
 const DOTA_CHECKS = ['dota', 'dota_input', 'gsi', 'launch', 'ptt', 'gsi_live'];
-const SLV = {};          // уровни полос (пики)
-function meterEl(id, vertical) { return h('div', {class: 'meter' + (vertical ? ' v' : '')}, h('i', {id: 'm_' + id})); }
+function meterEl(id, vertical) {
+  return h('div', {class: 'vu'}, h('div', {class: 'meter' + (vertical ? ' v' : '')}, h('i', {id: 'm_' + id}), h('b', {class: 'hold', id: 'mh_' + id})),
+    h('span', {class: 'db', id: 'md_' + id}, '-∞'));
+}
+// VU: шкала −60…0 dBFS, удержание пика 1.5 с, отметка перегруза 2 с
+const VU = {};
+const vuPos = l => l > 0 ? Math.max(0, Math.min(100, (20 * Math.log10(l) + 60) / 60 * 100)) : 0;
+function vuSet(id, raw) {
+  const v = VU[id] || (VU[id] = {lvl: 0, hold: 0, holdT: 0, clipT: 0});
+  const now = performance.now();
+  v.lvl = Math.max(raw, v.lvl * 0.85);
+  if (raw >= v.hold || now - v.holdT > 1500) { v.hold = raw; v.holdT = now; }
+  if (raw >= 0.99) v.clipT = now;
+  const m = document.getElementById('m_' + id); if (!m) return;
+  m.style.width = vuPos(v.lvl) + '%';
+  const hd = document.getElementById('mh_' + id); if (hd) hd.style.left = 'calc(' + vuPos(v.hold) + '% - 2px)';
+  const clip = now - v.clipT < 2000;
+  m.parentNode.classList.toggle('clip', clip);
+  const d = document.getElementById('md_' + id);
+  if (d) { d.textContent = clip ? 'CLIP' : (v.hold > 0.001 ? (20 * Math.log10(v.hold)).toFixed(0) + ' dB' : '-∞'); d.classList.toggle('bad', clip); }
+}
 function strip({id, title, sub, icon, children, cls}) {
   return h('div', {class: 'strip ' + (cls || '')}, h('div', {class: 'sthead'}, h('span', {class: 'sticon'}, icon), h('div', {style: 'min-width:0'}, h('b', {}, title), h('small', {}, sub || ''))),
     meterEl(id), children);
@@ -324,9 +342,37 @@ function dotaPage() {
         h('button', {onclick: () => api('POST', '/api/action', {action: 'rosh'})}, '🐉 Рошан убит'), ...kbd(hotkeysFor('rosh')),
         h('button', {title: 'Если Dota не подключена: нажмите в момент горна — таймеры и скрипты пойдут по ручному времени', onclick: () => api('POST', '/api/clock', {mode: 'horn'}).then(() => toast('Отсчёт с 0:00'))}, '📯 Горн 0:00'), ...kbd(hotkeysFor('clock_horn')),
         h('button', {onclick: () => { const t = prompt('Сколько сейчас на игровых часах? (например 12:34)'); if (t) api('POST', '/api/clock', {mode: 'sync', time: t}).then(() => toast('Время: ' + t)).catch(e => toast(e.message, true)); }}, '🕐 Синхр.'))),
-      h('div', {class: 'card'}, h('h3', {}, 'Настройка Dota 2'), checkRows(c => DOTA_CHECKS.includes(c.id)),
+      h('div', {class: 'card'}, h('h3', {}, 'Настройка Dota 2'), checkRows(c => DOTA_CHECKS.includes(c.id)), h('div', {class: 'mute', style: 'margin-top:8px'}, 'Микрофон в Dota 2:'), appCheck(/dota2/i, 'Dota 2'),
         h('div', {class: 'row', style: 'margin-top:10px'}, h('button', {onclick: loadSetup}, '🔄 Проверить снова'), h('button', {onclick: () => go('scripts')}, '⚡ Скрипт «Ганк на миде»')))),
     h('div', {style: 'margin-top:16px'}, timersContent()));
+}
+// какая программа слушает какое устройство записи (Windows audio sessions)
+function appCheck(re, app) {
+  const out = h('span', {class: 'mute'});
+  const btn = h('button', {class: 'small', onclick: async () => {
+    out.textContent = '…';
+    try {
+      const l = ((await api('GET', '/api/apps/capture')).sessions || []).filter(x => re.test(x.process));
+      const onCable = l.find(x => /cable|voicemeeter/i.test(x.device));
+      if (onCable) { out.className = 'ok'; out.textContent = `✅ ${app} слушает ${onCable.device.replace(/\s*\(.*\)$/, '')}${onCable.active ? '' : ' (сейчас не пишет)'}`; }
+      else if (l.length) { out.className = 'bad'; out.textContent = `❌ ${app} слушает «${l[0].device.replace(/\s*\(.*\)$/, '')}» — выберите CABLE Output`; }
+      else { out.className = 'warn'; out.textContent = `⚠ ${app} сейчас не открыл микрофон — зайдите в голосовой канал или откройте «Голос и видео» и проверьте снова`; }
+    } catch (e) { out.className = 'bad'; out.textContent = e.message; }
+  }}, '🔍 Проверить');
+  return h('div', {class: 'row', style: 'margin-top:6px'}, btn, out);
+}
+function listenersCard() {
+  const box = h('div', {}, h('p', {class: 'mute'}, 'Нажмите «Обновить», чтобы увидеть, какие программы сейчас пишут звук и с какого устройства.'));
+  const load = async () => {
+    try {
+      const l = (await api('GET', '/api/apps/capture')).sessions || [];
+      box.replaceChildren(l.length ? h('table', {}, h('tr', {}, h('th', {}, 'Программа'), h('th', {}, 'Устройство'), h('th', {}, '')),
+        l.map(x => h('tr', {}, h('td', {}, x.process || ('PID ' + x.pid)), h('td', {class: /cable|voicemeeter/i.test(x.device) ? 'ok' : ''}, x.device), h('td', {class: 'mute'}, x.active ? '● пишет' : '')))) :
+        h('p', {class: 'mute'}, 'Сейчас ни одна программа не открыла микрофон.'));
+    } catch (e) { box.replaceChildren(h('p', {class: 'bad'}, e.message)); }
+  };
+  return h('div', {class: 'card'}, h('div', {class: 'row'}, h('h3', {style: 'margin:0'}, 'Кто слушает микрофоны'), h('div', {class: 'grow'}), h('button', {class: 'small', onclick: load}, '🔄 Обновить')),
+    h('p', {class: 'mute', style: 'font-size:12px'}, 'Зелёным — программы, которые получают звук VoiceBox через кабель. Если нужная программа слушает настоящий микрофон, эффекты и звуки до неё не дойдут.'), box);
 }
 function discordPage() {
   const cable = (S.devices.capture || []).find(d => /cable output/i.test(d.name));
@@ -335,6 +381,7 @@ function discordPage() {
     h('div', {class: 'card'}, h('h3', {}, 'Discord — настройка за минуту'),
       step('1', 'Устройство ввода: ' + (cable ? cable.name : 'CABLE Output'), 'Discord → Настройки → Голос и видео → «Устройство ввода». Так Discord услышит ваш голос с эффектами и звуки.',
         h('button', {class: 'primary small', onclick: () => api('POST', '/api/open', {what: 'discord_voice'}).catch(e => toast(e.message, true))}, 'Открыть настройки')),
+      appCheck(/discord/i, 'Discord'),
       step('2', 'Устройство вывода: ваши наушники', 'Не выбирайте CABLE Input — иначе собеседники услышат сами себя.'),
       step('3', 'Шумоподавление Discord (Krisp) — выключить', 'Если у вас включён гейт или пресет с обработкой: Krisp режет эффекты и звуки саундборда. Эхоподавление тоже лучше выключить.'),
       step('4', 'Чувствительность ввода — вручную', 'Отключите «Автоматически определять» и поставьте порог около −50 dB, иначе тихие звуки обрежутся.'),
@@ -342,7 +389,7 @@ function discordPage() {
       h('div', {class: 'row', style: 'margin-top:12px'}, h('button', {onclick: () => { go('test'); }}, '🩺 Проверить: «Как меня слышит команда»'))),
     h('div', {class: 'card'}, h('h3', {}, 'Другие программы'),
       h('p', {class: 'mute'}, 'Принцип тот же для любой программы: микрофон = ', h('b', {}, cable ? cable.name : 'CABLE Output'), '.'),
-      h('table', {}, [['TeamSpeak', 'Настройки → Захват → Устройство захвата'], ['Telegram', 'Настройки → Звонки → Микрофон'], ['OBS', 'Источник «Захват входного аудиопотока» → CABLE Output'], ['CS2', 'Windows → Звук → устройство ввода по умолчанию (игра берёт системное)'], ['Dota 2', 'вкладка «Dota 2» — настраивается автоматически']].map(([a, b]) => h('tr', {}, h('td', {}, h('b', {}, a)), h('td', {class: 'mute'}, b))))));
+      h('table', {}, [['TeamSpeak', 'Настройки → Захват → Устройство захвата'], ['Telegram', 'Настройки → Звонки → Микрофон'], ['OBS', 'Источник «Захват входного аудиопотока» → CABLE Output'], ['CS2', 'Windows → Звук → устройство ввода по умолчанию (игра берёт системное)'], ['Dota 2', 'вкладка «Dota 2» — настраивается автоматически']].map(([a, b]) => h('tr', {}, h('td', {}, h('b', {}, a)), h('td', {class: 'mute'}, b))))), listenersCard());
 }
 
 function renderGame() {
@@ -638,6 +685,34 @@ async function runTest(id) {
   } catch (e) { TR[id] = {verdict: 'fail', summary: e.message}; }
   testRunning = null; render();
 }
+// мастер «Проверить всё»: наушники → микрофон → кабель → пресет → команда → кнопка чата
+let wizard = null;
+async function runAll() {
+  const order = TESTS.map(t => t[0]).filter(id => id !== 'ptt' || (S.config.ptt && S.config.ptt.key));
+  wizard = {i: 0, n: order.length, cur: ''};
+  for (const id of order) {
+    wizard.cur = id; render();
+    if (['mic', 'voice', 'team'].includes(id)) { toast('Сейчас запись — говорите обычным голосом'); await new Promise(r => setTimeout(r, 800)); }
+    await runTest(id);
+    wizard.i++;
+    if (TR[id] && TR[id].verdict === 'fail' && ['monitor', 'cable'].includes(id)) { toast('Дальше проверять нет смысла — сначала исправьте: ' + TESTS.find(t => t[0] === id)[1], true); break; }
+  }
+  wizard.done = true; wizard.cur = ''; render();
+}
+function wizardCard() {
+  const done = TESTS.filter(t => TR[t[0]]);
+  const cnt = v => done.filter(t => TR[t[0]].verdict === v).length;
+  return h('div', {class: 'card', style: 'margin-bottom:16px'},
+    h('div', {class: 'row'}, h('h3', {style: 'margin:0'}, 'Проверить всё'), h('div', {class: 'grow'}),
+      wizard && !wizard.done ? h('span', {class: 'pill warn'}, `⏳ ${wizard.i + 1}/${wizard.n}: ${(TESTS.find(t => t[0] === wizard.cur) || [, ''])[1]}`) : '',
+      h('button', {class: 'primary', disabled: !!testRunning, onclick: runAll}, '▶ Проверить всё'),
+      h('button', {title: 'Журнал, настройки, устройства и результаты тестов одним файлом — приложите его к сообщению об ошибке',
+        onclick: async () => { try { const r = await api('POST', '/api/diag/bundle', {report: TR}); toast('Сохранено: ' + r.file); } catch (e) { toast(e.message, true); } }}, '📦 Диагностический пакет')),
+    done.length ? h('div', {class: 'row', style: 'margin-top:10px'},
+      done.map(t => h('span', {class: 'pill ' + ({ok: 'ok', warn: 'warn', fail: 'bad'}[TR[t[0]].verdict] || '')}, t[1] + ' ' + ({ok: '✅', warn: '⚠️', fail: '❌'}[TR[t[0]].verdict] || ''))),
+      h('span', {class: 'mute'}, `${cnt('ok')} ок · ${cnt('warn')} предупр. · ${cnt('fail')} ошибок`)) :
+      h('p', {class: 'mute', style: 'margin:8px 0 0'}, 'Все тесты по очереди, около 20 секунд. Во время записи говорите обычным голосом.'));
+}
 function statsLine(s) {
   if (!s) return '';
   return h('div', {class: 'stats'},
@@ -659,7 +734,7 @@ pages.test = () => {
         r.ask && h('div', {class: 'hint', style: 'margin:8px 0 0'}, r.ask),
         r.suggest && r.suggest.mic_gain && h('button', {style: 'margin-top:8px', onclick: () => { edit(c => c.mic_gain = r.suggest.mic_gain); toast('Усиление микрофона: ' + r.suggest.mic_gain); }}, '✔ Применить усиление ' + r.suggest.mic_gain)));
   });
-  return h('div', {},
+  return h('div', {}, wizardCard(),
     h('div', {class: 'hint'}, 'Тесты идут по-настоящему через выбранные устройства. Порядок: наушники → микрофон → кабель → «как меня слышит команда». Если в Dota включена активация голосом, тестовый тон может попасть в чат.'),
     h('div', {class: 'grid'}, cards));
 };
@@ -774,16 +849,8 @@ function connectEvents() {
   const es = new EventSource('/api/events?t=' + encodeURIComponent(TOKEN));
   es.addEventListener('levels', e => {
     LV = JSON.parse(e.data);
-    for (const [id, v] of Object.entries(LV.strips || {})) {
-      SLV[id] = Math.max(v, (SLV[id] || 0) * 0.85);
-      const m = document.getElementById('m_src_' + id);
-      if (m) m.style.width = Math.min(100, Math.sqrt(SLV[id]) * 100) + '%';
-    }
-    for (const k in peaks) {
-      peaks[k] = Math.max(LV[k], peaks[k] * 0.85);
-      const m = document.getElementById('m_' + k);
-      if (m) m.style.width = Math.min(100, Math.sqrt(peaks[k]) * 100) + '%';
-    }
+    for (const [id, v] of Object.entries(LV.strips || {})) vuSet('src_' + id, v);
+    for (const k of ['mic_in', 'voice_out', 'monitor']) vuSet(k, LV[k] || 0);
   });
   es.addEventListener('status', e => {
     const prev = ST; ST = JSON.parse(e.data);

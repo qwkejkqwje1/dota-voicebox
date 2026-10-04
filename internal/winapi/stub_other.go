@@ -41,3 +41,29 @@ func Alert(title, text string)          { log.Printf("%s: %s", title, text) }
 func SetHighPriority()                  {}
 
 func StartKeyHook(chan<- combo.Event) error { return errWin }
+
+// AudioEndpoint — устройство звука Windows (заглушка).
+type AudioEndpoint struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Capture     bool   `json:"capture"`
+	Default     bool   `json:"default"`
+	DefaultComm bool   `json:"default_comm"`
+	Rate        int    `json:"rate"`
+	Bits        int    `json:"bits"`
+}
+
+func AudioEndpoints() ([]AudioEndpoint, error) { return nil, errWin }
+func SetDefaultAudio(string) error             { return errWin }
+func SetEndpointRate(string, int) error        { return errWin }
+func OpenSoundPanel(int) error                 { return errWin }
+
+// AppSession — программа, открывшая устройство записи (заглушка).
+type AppSession struct {
+	Device  string `json:"device"`
+	Process string `json:"process"`
+	PID     uint32 `json:"pid"`
+	Active  bool   `json:"active"`
+}
+
+func CaptureSessions() ([]AppSession, error) { return nil, errWin }

@@ -56,6 +56,9 @@ func (a *App) SetupStatus() SetupStatus {
 		ch.Fix, ch.FixLbl = "cable", "Скачать и установить"
 	}
 	add(ch)
+	if cable != "" {
+		a.cableChecks(add)
+	}
 
 	as := a.out.Status()
 	ch = Check{ID: "audio", Title: "Аудио", OK: as.Running}
@@ -224,12 +227,17 @@ func (a *App) Fix(id string) error {
 			winapi.OpenURL("https://vb-audio.com/Cable/")
 			return fmt.Errorf("не удалось скачать (%v) — открыл сайт, установите вручную", err)
 		}
+		rememberDefaultOut()
 		log.Print("Запускаю установщик VB-Cable (подтвердите запрос администратора)…")
 		if err := winapi.RunElevated(setup, "-i -h"); err != nil {
 			return err
 		}
 		go a.waitForCable()
 		return nil
+	case "default_out":
+		return a.fixDefaultOut()
+	case "cable_rate":
+		return a.fixCableRate()
 	}
 	return fmt.Errorf("неизвестное действие %q", id)
 }
@@ -242,6 +250,7 @@ func (a *App) waitForCable() {
 		_, p, err := audio.Devices()
 		if err == nil && audio.FindCable(p) != "" {
 			log.Print("VB-Cable установлен ✓ — запускаю аудио")
+			a.afterCableInstall()
 			a.Fix("audio")
 			return
 		}
@@ -292,6 +301,9 @@ func (a *App) Watchdog() {
 	n := 0
 	for range t.C {
 		n++
+		if n%6 == 0 {
+			a.watchDefault()
+		}
 		if m, ok := a.out.(interface{ RetrySources() }); ok && n%2 == 0 {
 			m.RetrySources()
 		}

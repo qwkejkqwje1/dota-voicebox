@@ -99,6 +99,11 @@ func (s *Server) Serve(l net.Listener) error {
 			return map[string]any{"backups": config.Backups(s.App.ConfigPath)}, nil
 		},
 		"POST /api/backups/restore": s.restoreBackup,
+		"POST /api/diag/bundle":     s.diagBundle,
+		"GET /api/apps/capture": func(*http.Request) (any, error) {
+			l, err := winapi.CaptureSessions()
+			return map[string]any{"sessions": l}, err
+		},
 	}
 	for pattern, h := range api {
 		h := h
