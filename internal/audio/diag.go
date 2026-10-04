@@ -3,7 +3,6 @@ package audio
 import (
 	"errors"
 	"fmt"
-	"strings"
 	"sync/atomic"
 	"time"
 
@@ -53,21 +52,6 @@ func (e *Engine) TestPeaks() (voice, monitor float32) {
 	return e.tpOut.Load(), e.tpMon.Load()
 }
 
-// cableCapturePair — какое устройство ввода соответствует выбранному кабелю.
-func cableCapturePair(voiceOut string) []string {
-	n := strings.ToLower(voiceOut)
-	switch {
-	case strings.Contains(n, "voicemeeter aux"):
-		return []string{"voicemeeter out b2", "voicemeeter aux output"}
-	case strings.Contains(n, "voicemeeter"):
-		return []string{"voicemeeter out b1", "voicemeeter output"}
-	case strings.Contains(n, "cable input"):
-		// "CABLE Input (VB-Audio Virtual Cable)" → "CABLE Output (VB-Audio Virtual Cable)"
-		return []string{strings.Replace(n, "cable input", "cable output", 1), "cable output"}
-	}
-	return []string{"cable output"}
-}
-
 // CaptureCable записывает то, что приходит на «другой конец» виртуального кабеля —
 // ровно то, что слышит Dota 2. during вызывается через 300 мс после старта записи.
 // Возвращает запись, момент начала записи и имя устройства.
@@ -87,20 +71,21 @@ func (e *Engine) CaptureCable(d time.Duration, during func()) ([]float32, time.T
 	}
 	var id *malgo.DeviceID
 	var name string
-	for _, want := range cableCapturePair(st.VoiceOut) {
-		for i := range ds {
-			if strings.Contains(strings.ToLower(ds[i].Name()), want) {
-				x := ds[i].ID
-				id, name = &x, ds[i].Name()
-				break
-			}
-		}
-		if id != nil {
-			break
-		}
+	list := make([]Device, len(ds))
+	names := make([]string, len(ds))
+	for i := range ds {
+		list[i], names[i] = Device{Name: ds[i].Name()}, ds[i].Name()
+	}
+	want := e.opt.CableRec
+	if want == "" {
+		want = CablePair(st.VoiceOut, list)
+	}
+	if i := matchDevice(names, want); i >= 0 {
+		x := ds[i].ID
+		id, name = &x, ds[i].Name()
 	}
 	if id == nil {
-		return nil, time.Time{}, "", fmt.Errorf("не найдено устройство записи кабеля (ищу %q)", cableCapturePair(st.VoiceOut)[0])
+		return nil, time.Time{}, "", fmt.Errorf("не найден «другой конец» кабеля %q — укажите его в «Настройка → Устройства → Другой конец кабеля»", st.VoiceOut)
 	}
 	r := &recorder{buf: make([]float32, int(d.Seconds()*sounds.SampleRate))}
 	var started atomic.Int64

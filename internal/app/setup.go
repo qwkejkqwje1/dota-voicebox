@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -43,17 +44,22 @@ func (a *App) SetupStatus() SetupStatus {
 	var st SetupStatus
 	add := func(ch Check) { st.Checks = append(st.Checks, ch) }
 
-	_, playback, derr := audio.Devices()
-	cable := audio.FindCable(playback)
-	ch := Check{ID: "cable", Title: "Виртуальный кабель (VB-Audio Cable)"}
+	capture, playback, derr := audio.Devices()
+	cable, rec := a.cableNames(capture, playback)
+	ch := Check{ID: "cable", Title: "Виртуальный кабель"}
 	switch {
 	case derr != nil:
 		ch.Detail = "не удалось получить список устройств: " + derr.Error()
+	case cable != "" && rec != "":
+		ch.OK, ch.Detail = true, fmt.Sprintf("%s → в программах выбрать микрофон «%s»", cable, rec)
 	case cable != "":
-		ch.OK, ch.Detail = true, cable
+		ch.OK, ch.Detail = true, cable+" (другой конец кабеля не найден — тесты кабеля не сработают; укажите его в «Устройства»)"
+	case c.Devices.VoiceOut != "":
+		ch.Detail = fmt.Sprintf("выбранное устройство «%s» не найдено — подключите его или выберите другое в «Устройства»", c.Devices.VoiceOut)
 	default:
-		ch.Detail = "не установлен — без него звуки не попадут в игру"
+		ch.Detail = "не найден — без него звук не попадёт в Discord и игры"
 		ch.Fix, ch.FixLbl = "cable", "Скачать и установить"
+		ch.Manual = "Уже стоит другой кабель (Virtual Audio Cable «Line 1», Voicemeeter…)? Выберите его ниже в «Устройства → Виртуальный кабель»."
 	}
 	add(ch)
 	if cable != "" {
@@ -71,7 +77,7 @@ func (a *App) SetupStatus() SetupStatus {
 	add(ch)
 
 	add(Check{ID: "dota_input", Title: "Микрофон в Dota 2", OK: as.Running,
-		Detail: "В Dota 2 → Настройки → Звук → Устройство ввода выберите «CABLE Output»",
+		Detail: fmt.Sprintf("В Dota 2 → Настройки → Звук → Устройство ввода выберите «%s»", recOr(rec)),
 		Manual: "Игра не даёт выбрать устройство программно — это единственный ручной шаг (один раз)."})
 
 	root := winapi.SteamRoot()
@@ -227,7 +233,7 @@ func (a *App) Fix(id string) error {
 			winapi.OpenURL("https://vb-audio.com/Cable/")
 			return fmt.Errorf("не удалось скачать (%v) — открыл сайт, установите вручную", err)
 		}
-		rememberDefaultOut()
+		a.rememberDefaultOut()
 		log.Print("Запускаю установщик VB-Cable (подтвердите запрос администратора)…")
 		if err := winapi.RunElevated(setup, "-i -h"); err != nil {
 			return err
@@ -308,8 +314,8 @@ func (a *App) Watchdog() {
 			m.RetrySources()
 		}
 		if !a.out.Running() {
-			_, p, err := audio.Devices()
-			if err == nil && audio.FindCable(p) != "" {
+			cp, p, err := audio.Devices()
+			if cbl, _ := a.cableNames(cp, p); err == nil && cbl != "" {
 				a.Fix("audio")
 			}
 		}
@@ -353,4 +359,42 @@ func (a *App) refreshGSIConfig() {
 		return
 	}
 	log.Print("GSI: конфиг обновлён (больше данных для таймеров и скриптов). Если Dota запущена — перезапустите её")
+}
+
+func recOr(rec string) string {
+	if rec == "" {
+		return "CABLE Output"
+	}
+	return rec
+}
+
+// cableNames — какой кабель используется (выбор пользователя важнее автопоиска) и его «другой конец».
+func (a *App) cableNames(capture, playback []audio.Device) (cable, rec string) {
+	c := a.Config()
+	if c.Devices.VoiceOut != "" {
+		for _, d := range playback {
+			if strings.EqualFold(d.Name, c.Devices.VoiceOut) || strings.Contains(strings.ToLower(d.Name), strings.ToLower(c.Devices.VoiceOut)) {
+				cable = d.Name
+				break
+			}
+		}
+	} else {
+		cable = audio.FindCable(playback)
+	}
+	if cable == "" {
+		return
+	}
+	if c.Devices.CableRec != "" {
+		for _, d := range capture {
+			if strings.EqualFold(d.Name, c.Devices.CableRec) || strings.Contains(strings.ToLower(d.Name), strings.ToLower(c.Devices.CableRec)) {
+				return cable, d.Name
+			}
+		}
+	}
+	return cable, audio.CablePair(cable, capture)
+}
+
+// CableNames — используемый кабель и его «другой конец» (для интерфейса).
+func (a *App) CableNames(capture, playback []audio.Device) (string, string) {
+	return a.cableNames(capture, playback)
 }

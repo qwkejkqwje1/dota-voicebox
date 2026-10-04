@@ -29,6 +29,7 @@ type Config struct {
 	Devices struct {
 		Mic      string `json:"mic"`
 		VoiceOut string `json:"voice_out"`
+		CableRec string `json:"cable_rec,omitempty"` // «другой конец» кабеля (для тестов и подсказок); "" — авто
 		Monitor  string `json:"monitor"`
 	} `json:"devices"`
 	MicGain       float64 `json:"mic_gain"`

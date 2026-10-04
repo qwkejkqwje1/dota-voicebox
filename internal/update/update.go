@@ -114,7 +114,8 @@ func Newer(a, b string) bool {
 			return pa[i] > pb[i]
 		}
 	}
-	return false
+	// v0.5.0 новее, чем v0.5.0-dev.1004 (предварительная сборка)
+	return !strings.Contains(a, "-") && strings.Contains(b, "-")
 }
 
 func parse(v string) ([3]int, bool) {

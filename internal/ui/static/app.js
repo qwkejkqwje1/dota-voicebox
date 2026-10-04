@@ -1,4 +1,10 @@
 'use strict';
+// похоже на виртуальный кабель (VB-Cable, Voicemeeter, Virtual Audio Cable «Line 1» и др.) — как audio.IsVirtual
+const VIRT = /vb-audio|voicemeeter|vaio|virtual|\bcable\b|\bvac\b|^line ?\d+\s*(\(|$)/i;
+const isVirt = name => VIRT.test((name || '').trim()) || (S && [S.config.devices.voice_out, S.config.devices.cable_rec, S.devices.cable, S.devices.cable_rec].some(n => n && (name === n || (name || '').startsWith(n + ' ('))));
+const shortDev = n => (n || '').replace(/\s*\(.*\)$/, '');
+const cableRecName = () => (S && S.devices.cable_rec) || 'CABLE Output';
+const cableName = () => (S && S.devices.cable) || 'CABLE Input';
 const TOKEN = new URLSearchParams(location.search).get('t') || '';
 let S = null;              // полное состояние (/api/state)
 let ST = null;             // живой статус
@@ -195,7 +201,7 @@ pages.home = () => {
   });
   const kind = h('select', {}, h('option', {value: 'input'}, '🎚 Вход (микрофон / аудиоинтерфейс)'), h('option', {value: 'loopback'}, '🔁 Звук устройства (музыка, браузер, игра)'));
   const dev = h('select', {});
-  const fillDev = () => dev.replaceChildren(...(kind.value === 'loopback' ? S.devices.playback : S.devices.capture || []).filter(d => !/cable|voicemeeter/i.test(d.name)).map(d => h('option', {value: d.name}, d.name)));
+  const fillDev = () => dev.replaceChildren(...(kind.value === 'loopback' ? S.devices.playback : S.devices.capture || []).filter(d => !isVirt(d.name)).map(d => h('option', {value: d.name}, d.name)));
   kind.onchange = fillDev; fillDev();
   const chan = h('input', {type: 'number', min: 0, max: 32, value: 0, title: '0 — все каналы; 1, 2… — конкретный вход аудиоинтерфейса'});
   const addCard = h('div', {class: 'strip add'}, h('b', {}, '＋ Источник'), kind, dev, h('div', {class: 'row'}, 'Канал', chan, h('span', {class: 'mute'}, '0 = все')),
@@ -353,9 +359,9 @@ function appCheck(re, app) {
     out.textContent = '…';
     try {
       const l = ((await api('GET', '/api/apps/capture')).sessions || []).filter(x => re.test(x.process));
-      const onCable = l.find(x => /cable|voicemeeter/i.test(x.device));
+      const onCable = l.find(x => isVirt(x.device));
       if (onCable) { out.className = 'ok'; out.textContent = `✅ ${app} слушает ${onCable.device.replace(/\s*\(.*\)$/, '')}${onCable.active ? '' : ' (сейчас не пишет)'}`; }
-      else if (l.length) { out.className = 'bad'; out.textContent = `❌ ${app} слушает «${l[0].device.replace(/\s*\(.*\)$/, '')}» — выберите CABLE Output`; }
+      else if (l.length) { out.className = 'bad'; out.textContent = `❌ ${app} слушает «${l[0].device.replace(/\s*\(.*\)$/, '')}» — выберите «${shortDev(cableRecName())}»`; }
       else { out.className = 'warn'; out.textContent = `⚠ ${app} сейчас не открыл микрофон — зайдите в голосовой канал или откройте «Голос и видео» и проверьте снова`; }
     } catch (e) { out.className = 'bad'; out.textContent = e.message; }
   }}, '🔍 Проверить');
@@ -367,7 +373,7 @@ function listenersCard() {
     try {
       const l = (await api('GET', '/api/apps/capture')).sessions || [];
       box.replaceChildren(l.length ? h('table', {}, h('tr', {}, h('th', {}, 'Программа'), h('th', {}, 'Устройство'), h('th', {}, '')),
-        l.map(x => h('tr', {}, h('td', {}, x.process || ('PID ' + x.pid)), h('td', {class: /cable|voicemeeter/i.test(x.device) ? 'ok' : ''}, x.device), h('td', {class: 'mute'}, x.active ? '● пишет' : '')))) :
+        l.map(x => h('tr', {}, h('td', {}, x.process || ('PID ' + x.pid)), h('td', {class: isVirt(x.device) ? 'ok' : ''}, x.device), h('td', {class: 'mute'}, x.active ? '● пишет' : '')))) :
         h('p', {class: 'mute'}, 'Сейчас ни одна программа не открыла микрофон.'));
     } catch (e) { box.replaceChildren(h('p', {class: 'bad'}, e.message)); }
   };
@@ -375,14 +381,14 @@ function listenersCard() {
     h('p', {class: 'mute', style: 'font-size:12px'}, 'Зелёным — программы, которые получают звук VoiceBox через кабель. Если нужная программа слушает настоящий микрофон, эффекты и звуки до неё не дойдут.'), box);
 }
 function discordPage() {
-  const cable = (S.devices.capture || []).find(d => /cable output/i.test(d.name));
+  const cable = {name: cableRecName()};
   const step = (n, title, text, extra) => h('div', {class: 'check'}, h('span', {class: 'ic'}, n), h('div', {}, h('b', {}, title), h('small', {}, text)), extra || h('span'));
   return h('div', {class: 'grid'},
     h('div', {class: 'card'}, h('h3', {}, 'Discord — настройка за минуту'),
       step('1', 'Устройство ввода: ' + (cable ? cable.name : 'CABLE Output'), 'Discord → Настройки → Голос и видео → «Устройство ввода». Так Discord услышит ваш голос с эффектами и звуки.',
         h('button', {class: 'primary small', onclick: () => api('POST', '/api/open', {what: 'discord_voice'}).catch(e => toast(e.message, true))}, 'Открыть настройки')),
       appCheck(/discord/i, 'Discord'),
-      step('2', 'Устройство вывода: ваши наушники', 'Не выбирайте CABLE Input — иначе собеседники услышат сами себя.'),
+      step('2', 'Устройство вывода: ваши наушники', 'Не выбирайте ' + shortDev(cableName()) + ' — иначе собеседники услышат сами себя.'),
       step('3', 'Шумоподавление Discord (Krisp) — выключить', 'Если у вас включён гейт или пресет с обработкой: Krisp режет эффекты и звуки саундборда. Эхоподавление тоже лучше выключить.'),
       step('4', 'Чувствительность ввода — вручную', 'Отключите «Автоматически определять» и поставьте порог около −50 dB, иначе тихие звуки обрежутся.'),
       step('5', 'Режим рации (по желанию)', 'Если в Discord включена «Рация», задайте ту же клавишу в «Настройка → Кнопка голосового чата» — VoiceBox будет нажимать её сам, когда играет звук.'),
@@ -764,9 +770,13 @@ pages.setup = () => {
         h('button', {class: 'primary', onclick: async () => { try { const r = await api('POST', '/api/setup/auto', {allow_steam_restart: confirm('Разрешить перезапуск Steam, если нужно добавить параметр запуска?')}); SETUP = r.setup; r.report.forEach(x => toast(x)); await load(); } catch (e) { toast(e.message, true); } }}, '✨ Настроить всё автоматически'),
         h('button', {onclick: loadSetup}, '🔄 Проверить снова'))),
     h('div', {class: 'card'}, h('h3', {}, 'Устройства'),
-      h('div', {class: 'sl'}, 'Микрофон', devSel('mic', (S.devices.capture || []).filter(d => !/cable output|voicemeeter out/i.test(d.name)), 'Авто (по умолчанию)'), ''),
+      h('div', {class: 'sl'}, 'Микрофон', devSel('mic', (S.devices.capture || []).filter(d => !isVirt(d.name)), 'Авто (по умолчанию)'), ''),
       h('div', {class: 'sl'}, 'Виртуальный кабель', devSel('voice_out', S.devices.playback, 'Авто (найти кабель)'), ''),
-      h('div', {class: 'sl'}, 'Наушники', devSel('monitor', (S.devices.playback || []).filter(d => !/cable input|voicemeeter/i.test(d.name)), 'Авто (по умолчанию)'), ''),
+      h('div', {class: 'sl', title: 'Устройство записи, на которое приходит звук из кабеля. Его выбирают микрофоном в Discord и играх.'}, 'Другой конец кабеля',
+        devSel('cable_rec', S.devices.capture, 'Авто' + (S.devices.cable_rec ? ' (' + shortDev(S.devices.cable_rec) + ')' : '')), ''),
+      S.devices.cable && h('p', {class: 'mute', style: 'font-size:12px;margin:0 0 6px'}, '📡 VoiceBox пишет в «' + S.devices.cable + '». В Discord / Dota / OBS выберите микрофон «' + cableRecName() + '».'),
+      !S.devices.cable && h('p', {class: 'warn', style: 'font-size:12px'}, 'Кабель не найден автоматически. Если он у вас есть (например «Line 1» от Virtual Audio Cable) — выберите его в списке выше.'),
+      h('div', {class: 'sl'}, 'Наушники', devSel('monitor', (S.devices.playback || []).filter(d => !isVirt(d.name)), 'Авто (по умолчанию)'), ''),
       S.devices.error && h('p', {class: 'bad'}, S.devices.error),
       h('h3', {style: 'margin-top:18px'}, 'Голосовой чат Dota 2'),
       h('div', {class: 'row'}, 'Кнопка:', h('span', {class: 'kbd'}, c.ptt.key || 'не задана'),

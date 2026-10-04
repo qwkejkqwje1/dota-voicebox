@@ -209,7 +209,7 @@ func (a *App) Reload() error {
 	a.scripts.Sync(cfg.Scripts)
 
 	// устройства: перезапуск движка только если выбор изменился
-	opts := audio.Options{MicDevice: cfg.Devices.Mic, VoiceOut: cfg.Devices.VoiceOut, MonitorOut: cfg.Devices.Monitor}
+	opts := audio.Options{MicDevice: cfg.Devices.Mic, VoiceOut: cfg.Devices.VoiceOut, CableRec: cfg.Devices.CableRec, MonitorOut: cfg.Devices.Monitor}
 	a.mu.Lock()
 	changed := a.devOpts == nil || *a.devOpts != opts
 	a.devOpts = &opts

@@ -165,6 +165,7 @@ func (s *Server) state(*http.Request) (any, error) {
 		presets = append(presets, presetInfo{Name: n, Builtin: builtin, Desc: presetDesc[n], Specs: specs})
 	}
 	capture, playback, derr := audio.Devices()
+	cable, cableRec := s.App.CableNames(capture, playback)
 	errStr := ""
 	if derr != nil {
 		errStr = derr.Error()
@@ -175,7 +176,7 @@ func (s *Server) state(*http.Request) (any, error) {
 		"sounds":     s.App.Sounds(),
 		"builtins":   sounds.BuiltinNames(),
 		"presets":    presets,
-		"devices":    map[string]any{"capture": capture, "playback": playback, "error": errStr},
+		"devices":    map[string]any{"capture": capture, "playback": playback, "error": errStr, "cable": cable, "cable_rec": cableRec},
 		"events":     gsiEvents,
 		"logs":       s.Logs.Lines(),
 		"status":     s.App.Status(),

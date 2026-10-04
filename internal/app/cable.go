@@ -4,22 +4,29 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"regexp"
 	"strings"
 
+	"github.com/qwkejkqwje1/dota-voicebox/internal/audio"
 	"github.com/qwkejkqwje1/dota-voicebox/internal/winapi"
 )
 
 // Проверки и автонастройка виртуального кабеля на уровне Windows:
 // кабель не должен быть устройством по умолчанию, частота — 48 кГц.
 
-var reVirtual = regexp.MustCompile(`(?i)cable|voicemeeter|vb-audio`)
-
 const cableRate = 48000
 
 var prevDefaultOut string // устройство по умолчанию до установки кабеля
 
-func isVirtual(e winapi.AudioEndpoint) bool { return reVirtual.MatchString(e.Name) }
+// isVirtual: похоже на кабель или выбрано пользователем как кабель / другой конец кабеля.
+func (a *App) isVirtual(e winapi.AudioEndpoint) bool {
+	c := a.Config()
+	for _, n := range []string{c.Devices.VoiceOut, c.Devices.CableRec} {
+		if n != "" && (strings.EqualFold(e.Name, n) || strings.HasPrefix(strings.ToLower(e.Name), strings.ToLower(n)+" (")) {
+			return true
+		}
+	}
+	return audio.IsVirtual(e.Name)
+}
 
 func shortName(n string) string {
 	if i := strings.Index(n, " ("); i > 0 {
@@ -39,7 +46,7 @@ func (a *App) cableChecks(add func(Check)) {
 		if e.Capture || !(e.Default || e.DefaultComm) {
 			continue
 		}
-		if isVirtual(e) {
+		if a.isVirtual(e) {
 			ch.OK = false
 			ch.Detail = fmt.Sprintf("«%s» стоит устройством вывода по умолчанию — звуки Windows, браузера и музыки польются в эфир", shortName(e.Name))
 			ch.Fix, ch.FixLbl = "default_out", "Вернуть наушники"
@@ -52,7 +59,7 @@ func (a *App) cableChecks(add func(Check)) {
 	var bad []string
 	found := false
 	for _, e := range eps {
-		if !isVirtual(e) {
+		if !a.isVirtual(e) {
 			continue
 		}
 		found = true
@@ -86,7 +93,7 @@ func (a *App) fixDefaultOut() error {
 	score := -1
 	for i := range eps {
 		e := &eps[i]
-		if e.Capture || isVirtual(*e) {
+		if e.Capture || a.isVirtual(*e) {
 			continue
 		}
 		sc := 0
@@ -119,7 +126,7 @@ func (a *App) fixCableRate() error {
 	var errs []string
 	changed := false
 	for _, e := range eps {
-		if !isVirtual(e) || e.Rate == 0 || e.Rate == cableRate {
+		if !a.isVirtual(e) || e.Rate == 0 || e.Rate == cableRate {
 			continue
 		}
 		if err := winapi.SetEndpointRate(e.ID, cableRate); err != nil {
@@ -144,10 +151,10 @@ func (a *App) fixCableRate() error {
 }
 
 // rememberDefaultOut запоминает текущее устройство по умолчанию (перед установкой кабеля).
-func rememberDefaultOut() {
+func (a *App) rememberDefaultOut() {
 	eps, _ := winapi.AudioEndpoints()
 	for _, e := range eps {
-		if !e.Capture && e.Default && !isVirtual(e) {
+		if !e.Capture && e.Default && !a.isVirtual(e) {
 			prevDefaultOut = e.ID
 		}
 	}
@@ -158,7 +165,7 @@ func (a *App) afterCableInstall() {
 	var cableDefault bool
 	eps, _ := winapi.AudioEndpoints()
 	for _, e := range eps {
-		if !e.Capture && (e.Default || e.DefaultComm) && isVirtual(e) {
+		if !e.Capture && (e.Default || e.DefaultComm) && a.isVirtual(e) {
 			cableDefault = true
 		}
 	}
@@ -184,7 +191,7 @@ func (a *App) watchDefault() {
 	}
 	cur := ""
 	for _, e := range eps {
-		if !e.Capture && e.Default && isVirtual(e) {
+		if !e.Capture && e.Default && a.isVirtual(e) {
 			cur = e.Name
 		}
 	}

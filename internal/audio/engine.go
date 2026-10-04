@@ -18,7 +18,8 @@ import (
 // Options — выбор устройств. Громкости меняются на лету через Set*.
 type Options struct {
 	MicDevice  string // подстрока имени микрофона ("" = по умолчанию)
-	VoiceOut   string // подстрока имени виртуального кабеля ("" = автопоиск)
+	VoiceOut   string // имя виртуального кабеля ("" = автопоиск); может быть любое устройство вывода
+	CableRec   string // «другой конец» кабеля для тестов ("" = определить автоматически)
 	MonitorOut string // наушники ("" = по умолчанию)
 	PeriodMS   uint32
 }
@@ -142,6 +143,7 @@ func (e *Engine) Status() Status {
 type Device struct {
 	Name      string `json:"name"`
 	IsDefault bool   `json:"is_default"`
+	Virtual   bool   `json:"virtual"` // похоже на виртуальный кабель
 }
 
 // Devices возвращает микрофоны и устройства вывода.
@@ -158,7 +160,7 @@ func Devices() (capture, playback []Device, err error) {
 		}
 		out := make([]Device, 0, len(ds))
 		for i := range ds {
-			out = append(out, Device{Name: ds[i].Name(), IsDefault: ds[i].IsDefault != 0})
+			out = append(out, Device{Name: ds[i].Name(), IsDefault: ds[i].IsDefault != 0, Virtual: IsVirtual(ds[i].Name())})
 		}
 		return out, nil
 	}
@@ -167,28 +169,6 @@ func Devices() (capture, playback []Device, err error) {
 	}
 	playback, err = conv(malgo.Playback)
 	return
-}
-
-// Имена виртуальных кабелей, которые ищем автоматически (в порядке приоритета).
-var cableHints = []string{"cable input", "voicemeeter input", "voicemeeter aux input", "vb-audio"}
-
-// FindCable ищет виртуальный кабель среди устройств вывода.
-func FindCable(playback []Device) string {
-	for _, h := range cableHints {
-		for _, d := range playback {
-			if strings.Contains(strings.ToLower(d.Name), h) {
-				return d.Name
-			}
-		}
-	}
-	return ""
-}
-
-// IsCableInput — является ли устройство ввода выходом виртуального кабеля
-// (его нельзя выбирать как свой микрофон — будет петля).
-func IsCableInput(name string) bool {
-	n := strings.ToLower(name)
-	return strings.Contains(n, "cable output") || strings.Contains(n, "voicemeeter out") || strings.Contains(n, "vb-audio")
 }
 
 // ListDevices печатает устройства (для флага -list-devices).
@@ -236,11 +216,9 @@ func findDevice(ctx *malgo.AllocatedContext, t malgo.DeviceType, sub string, ski
 		}
 		return nil, "по умолчанию", nil
 	}
-	for i := range ds {
-		if strings.Contains(strings.ToLower(ds[i].Name()), strings.ToLower(sub)) {
-			id := ds[i].ID
-			return &id, ds[i].Name(), nil
-		}
+	if i := matchDevice(names, sub); i >= 0 {
+		id := ds[i].ID
+		return &id, ds[i].Name(), nil
 	}
 	return nil, "", fmt.Errorf("устройство %q не найдено. Доступны: %s", sub, strings.Join(names, " | "))
 }
@@ -311,7 +289,7 @@ func (e *Engine) startLocked() error {
 		_, p, _ := Devices()
 		voiceOut = FindCable(p)
 		if voiceOut == "" {
-			return fmt.Errorf("виртуальный кабель не найден — установите VB-Audio Virtual Cable (вкладка «Настройка»)")
+			return fmt.Errorf("виртуальный кабель не найден — установите VB-Audio Virtual Cable или выберите свой кабель в «Настройка → Устройства»")
 		}
 	}
 	e.status.CableFound = true
@@ -326,7 +304,7 @@ func (e *Engine) startLocked() error {
 		return fmt.Errorf("виртуальный кабель: %w", err)
 	}
 	monID, monName, err := findDevice(ctx, malgo.Playback, e.opt.MonitorOut, func(n string) bool {
-		return FindCable([]Device{{Name: n}}) != ""
+		return IsVirtual(n) || n == outName
 	})
 	if err != nil {
 		return fmt.Errorf("наушники: %w", err)
