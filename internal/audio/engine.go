@@ -78,6 +78,9 @@ type Engine struct {
 
 	// полоса микрофона: mute и шумовой гейт
 	micMute  atomic.Bool
+	talkGate atomic.Bool
+	talkOpen atomic.Bool
+	talkGain float32
 	gateThr  afloat // линейный порог, 0 = выкл
 	gateGain float32
 	gateHold int
@@ -90,7 +93,7 @@ type Engine struct {
 }
 
 func NewEngine() *Engine {
-	e := &Engine{micMonBuf: newRing(sounds.SampleRate / 2), gateGain: 1}
+	e := &Engine{micMonBuf: newRing(sounds.SampleRate / 2), gateGain: 1, talkGain: 1}
 	e.src.monRing = newDrift(sounds.SampleRate / 50)
 	e.chain.Store(&dsp.Chain{Name: "clean"})
 	e.micGain.Store(1)
@@ -371,6 +374,7 @@ func (e *Engine) onDuplex(out, in []byte, frames uint32) {
 		peak(e.work, &e.lvMic)
 		e.gate(e.work)
 		e.vizPre.write(e.work)
+		e.talk(e.work)
 	}
 	chain := e.chain.Load()
 	playing := e.VoiceMix.Render(e.sfx)

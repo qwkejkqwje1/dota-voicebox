@@ -106,3 +106,4 @@ button:disabled{opacity:.5;cursor:default}
 .meter .hold{position:absolute;top:0;bottom:0;width:2px;left:-2px;background:#fff;opacity:.8}
 .meter.clip{border-color:var(--bad);box-shadow:0 0 6px rgba(224,69,58,.6)}
 .meter>i{transition:none}
+.talk{display:flex;flex-direction:column;gap:6px;border-top:1px solid var(--line);padding-top:8px}.talk small{font-size:11px}.talk select{width:100%}

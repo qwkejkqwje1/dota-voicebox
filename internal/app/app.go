@@ -77,6 +77,7 @@ type App struct {
 	scripts *script.Manager
 
 	pttOwned  atomic.Bool
+	talk      talkCtl
 	pending   atomic.Int32
 	lastVoice atomic.Int64
 	stamp     string
@@ -205,6 +206,7 @@ func (a *App) Reload() error {
 		m.SetMicStrip(cfg.Mic.Mute, cfg.Mic.GateDB)
 		m.SetSources(cfg.Sources)
 	}
+	a.applyTalk(cfg, pttVK)
 	a.applyHotkeys()
 	a.scripts.Sync(cfg.Scripts)
 
@@ -265,7 +267,10 @@ func (a *App) PauseHotkeys(on bool) {
 }
 
 // KeyEvent — нажатие из глобального перехвата клавиатуры (для скриптов).
-func (a *App) KeyEvent(ev combo.Event) { a.scripts.Key(ev) }
+func (a *App) KeyEvent(ev combo.Event) {
+	a.talkKey(ev)
+	a.scripts.Key(ev)
+}
 
 // AttachHotkeys включает глобальные горячие клавиши.
 func (a *App) AttachHotkeys() {
@@ -301,6 +306,8 @@ func (a *App) Do(act string) {
 		if err := a.Reload(); err != nil {
 			log.Printf("Ошибка конфига: %v", err)
 		}
+	case act == "talk":
+		a.TalkToggle()
 	case act == "mic_mute":
 		a.UpdateConfig(func(c *config.Config) { c.Mic.Mute = !c.Mic.Mute })
 		log.Printf("Микрофон: %s", map[bool]string{true: "ВЫКЛЮЧЕН (mute)", false: "включён"}[a.Config().Mic.Mute])
@@ -638,6 +645,7 @@ type Status struct {
 	Upcoming   []timers.Upcoming   `json:"upcoming"`
 	Strips     []audio.StripStatus `json:"strips"`
 	MicMute    bool                `json:"mic_mute"`
+	Talk       TalkStatus          `json:"talk"`
 	Update     any                 `json:"update,omitempty"`
 }
 
@@ -656,6 +664,7 @@ func (a *App) Status() Status {
 	a.mu.Lock()
 	s := Status{Preset: a.preset, PTTKey: a.cfg.PTT.Key}
 	a.mu.Unlock()
+	s.Talk = a.talkStatus()
 	s.MicMonitor = a.out.MicMonitor()
 	if m, ok := a.out.(StripOutput); ok {
 		s.Strips = m.Strips()

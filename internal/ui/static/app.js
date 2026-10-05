@@ -133,6 +133,8 @@ function renderPills() {
     h('span', {class: 'pill ' + (ST.ptt_key ? '' : 'warn')}, '⌨️ PTT: ' + (ST.ptt_key || 'не задана')),
     h('span', {class: 'pill'}, '🎙 ' + ST.preset),
   ];
+  const tk = ST.talk || {};
+  if (tk.mode && tk.mode !== 'always') pills.push(h('span', {class: 'pill ' + (tk.open ? 'live' : '')}, tk.open ? '🎙 ГОВОРЮ' : '🎙 по кнопке ' + (tk.key || '')));
   if (ST.ptt_held) pills.push(h('span', {class: 'pill live'}, '● В ЭФИРЕ'));
   if (ST.mic_monitor) pills.push(h('span', {class: 'pill warn'}, '🎧 Слышу себя'));
   document.getElementById('pills').replaceChildren(...pills);
@@ -183,7 +185,8 @@ pages.home = () => {
     h('div', {class: 'row'},
       h('button', {class: 'small ' + (c.mic.mute ? 'on' : ''), onclick: () => api('POST', '/api/action', {action: 'mic_mute'}).then(load)}, c.mic.mute ? '🔇 Включить' : '🔇 Mute'),
       h('button', {class: 'small ' + (ST.mic_monitor ? 'on' : ''), onclick: () => api('POST', '/api/action', {action: 'mic_monitor'})}, '🎧 Слышать себя'),
-      h('select', {class: 'small', onchange: e => api('POST', '/api/action', {action: 'preset:' + e.target.value})}, S.presets.map(p => h('option', {value: p.name, selected: ST.preset === p.name}, '🎛 ' + p.name))))]});
+      h('select', {class: 'small', onchange: e => api('POST', '/api/action', {action: 'preset:' + e.target.value})}, S.presets.map(p => h('option', {value: p.name, selected: ST.preset === p.name}, '🎛 ' + p.name)))),
+    talkControls(c)]});
   const srcStrips = (c.sources || []).map((src, i) => {
     const s = st.find(x => x.id === src.id) || {};
     const set = (k, debounce) => v => edit(x => x.sources[i][k] = v, {debounce: debounce ? 300 : 0, rerender: !debounce});
@@ -220,6 +223,25 @@ pages.home = () => {
         bus('monitor', '🎧', 'Мониторинг', ST.audio.monitor,
           knob('Громкость', c.monitor_volume, 0, 1.5, 0.05, v => edit(x => x.monitor_volume = v, {debounce: 300, rerender: false}))))),
     vizCard());
+}
+
+// режим «говорю только по кнопке»
+function talkControls(c) {
+  const t = c.talk || {mode: 'always'};
+  const key = t.key || c.ptt.key;
+  const set = (k, v) => edit(x => { x.talk = x.talk || {mode: 'always', key: '', release_ms: 150, press_game_key: true}; x.talk[k] = v; });
+  return h('div', {class: 'talk'},
+    h('div', {class: 'knob'}, h('span', {}, 'Микрофон в эфир')),
+    h('select', {onchange: e => set('mode', e.target.value)},
+      [['always', '🎙 Всегда'], ['ptt', '✊ Пока держу кнопку'], ['toggle', '🔘 Нажал — вкл / ещё раз — выкл']].map(([v, l]) => h('option', {value: v, selected: (t.mode || 'always') === v}, l))),
+    t.mode && t.mode !== 'always' && [
+      h('div', {class: 'row'}, 'Кнопка:', h('span', {class: 'kbd'}, key || 'не задана'),
+        h('button', {class: 'small', onclick: async () => { const k = await captureKey('Кнопка, пока держите которую вас слышно', true); if (k) set('key', k === c.ptt.key ? '' : k); }}, 'Назначить'),
+        t.key && h('button', {class: 'small', title: 'Использовать кнопку голосового чата игры', onclick: () => set('key', '')}, '= кнопка игры')),
+      h('small', {class: 'mute'}, !t.key ? `Та же кнопка, что и голосовой чат в игре (${c.ptt.key || 'не задана'}): держите её как обычно — игра включит войс, VoiceBox откроет микрофон.`
+        : 'Своя кнопка: VoiceBox откроет микрофон' + (t.press_game_key !== false && c.ptt.key ? ` и сам зажмёт кнопку голосового чата игры (${c.ptt.key}).` : '.')),
+      t.key && h('label', {class: 'sw', style: 'font-size:12px'}, h('input', {type: 'checkbox', checked: t.press_game_key !== false, onchange: e => set('press_game_key', e.target.checked)}), 'Зажимать кнопку голосового чата игры'),
+      knob('Не обрывать конец фразы', t.release_ms ?? 150, 0, 600, 10, v => edit(x => x.talk.release_ms = v, {debounce: 300, rerender: false}), v => v + ' мс')]);
 }
 
 // ---------- визуализация ----------
@@ -348,7 +370,7 @@ function dotaPage() {
         h('button', {onclick: () => api('POST', '/api/action', {action: 'rosh'})}, '🐉 Рошан убит'), ...kbd(hotkeysFor('rosh')),
         h('button', {title: 'Если Dota не подключена: нажмите в момент горна — таймеры и скрипты пойдут по ручному времени', onclick: () => api('POST', '/api/clock', {mode: 'horn'}).then(() => toast('Отсчёт с 0:00'))}, '📯 Горн 0:00'), ...kbd(hotkeysFor('clock_horn')),
         h('button', {onclick: () => { const t = prompt('Сколько сейчас на игровых часах? (например 12:34)'); if (t) api('POST', '/api/clock', {mode: 'sync', time: t}).then(() => toast('Время: ' + t)).catch(e => toast(e.message, true)); }}, '🕐 Синхр.'))),
-      h('div', {class: 'card'}, h('h3', {}, 'Настройка Dota 2'), checkRows(c => DOTA_CHECKS.includes(c.id)), h('div', {class: 'mute', style: 'margin-top:8px'}, 'Микрофон в Dota 2:'), appCheck(/dota2/i, 'Dota 2'),
+      h('div', {class: 'card'}, h('h3', {}, 'Настройка Dota 2'), checkRows(c => DOTA_CHECKS.includes(c.id)), h('div', {class: 'mute', style: 'margin-top:8px'}, 'Микрофон в Dota 2:'), appCheck(/dota2/i, 'Dota 2'), h('div', {class: 'hint', style: 'margin:10px 0 0;font-size:12px'}, '🎙 Хотите, чтобы голос шёл только по кнопке? «Пульт → Микрофон в эфир → Пока держу кнопку». С кнопкой голосового чата Dota всё работает само; со своей кнопкой (например Mouse4) VoiceBox сам зажмёт кнопку чата Dota.'),
         h('div', {class: 'row', style: 'margin-top:10px'}, h('button', {onclick: loadSetup}, '🔄 Проверить снова'), h('button', {onclick: () => go('scripts')}, '⚡ Скрипт «Ганк на миде»')))),
     h('div', {style: 'margin-top:16px'}, timersContent()));
 }
@@ -519,7 +541,7 @@ pages.voice = () => {
 function actionOptions(sel) {
   const opts = [['Звуки', S.sounds.flatMap(s => [['sound:' + s.id, '🔊 ' + (s.label || s.id)], ['sound:' + s.id + '@monitor', '🎧 ' + (s.label || s.id) + ' (только мне)']])],
     ['Голос', [...S.presets.map(p => ['preset:' + p.name, '🎙 ' + p.name]), ['preset:next', '🎙 следующий пресет'], ['preset:prev', '🎙 предыдущий пресет']]],
-    ['Прочее', [['rosh', '🐉 Рошан убит'], ['clock_horn', '📯 горн 0:00 (ручное время)'], ['stop', '⏹ стоп всё'], ['mic_monitor', '🎧 слышать себя'], ['mic_mute', '🔇 микрофон вкл/выкл'], ['reload', '🔄 перечитать конфиг'], ['ui', '🪟 открыть окно']]]];
+    ['Прочее', [['rosh', '🐉 Рошан убит'], ['clock_horn', '📯 горн 0:00 (ручное время)'], ['stop', '⏹ стоп всё'], ['mic_monitor', '🎧 слышать себя'], ['mic_mute', '🔇 микрофон вкл/выкл'], ['talk', '🔘 говорить вкл/выкл (режим «по кнопке»)'], ['reload', '🔄 перечитать конфиг'], ['ui', '🪟 открыть окно']]]];
   return opts.map(([g, items]) => h('optgroup', {label: g}, items.map(([v, l]) => h('option', {value: v, selected: v === sel}, l))));
 }
 pages.keys = () => {

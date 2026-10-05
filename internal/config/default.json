@@ -20,6 +20,13 @@
     "tail_ms": 200
   },
 
+  "talk": {
+    "mode": "always",
+    "key": "",
+    "release_ms": 150,
+    "press_game_key": true
+  },
+
   "start_preset": "clean",
   "sounds_dir": "sounds",
   "tts_rate": 1,

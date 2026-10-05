@@ -47,6 +47,14 @@ type Config struct {
 		TailMS     int    `json:"tail_ms"`
 	} `json:"ptt"`
 
+	// Talk — когда микрофон идёт в эфир: всегда, пока держу кнопку, или по нажатию (вкл/выкл).
+	Talk struct {
+		Mode      string `json:"mode"`           // always | ptt | toggle
+		Key       string `json:"key"`            // "" = кнопка голосового чата игры (ptt.key)
+		ReleaseMS int    `json:"release_ms"`     // задержка закрытия после отпускания — не обрезать конец слова
+		PressGame bool   `json:"press_game_key"` // сам зажимать кнопку голосового чата игры, пока говорю
+	} `json:"talk"`
+
 	StartPreset string                `json:"start_preset"`
 	SoundsDir   string                `json:"sounds_dir"`
 	TTSRate     int                   `json:"tts_rate"`
