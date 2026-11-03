@@ -149,6 +149,10 @@ func cutLabel(s string) string {
 
 // ImportSound сохраняет загруженный файл (WAV или MP3) в папку звуков и добавляет плитку.
 func (a *App) ImportSound(name string, data []byte, ext string) (string, error) {
+	return a.importSound(name, data, ext, "🔊")
+}
+
+func (a *App) importSound(name string, data []byte, ext, emoji string) (string, error) {
 	ext = strings.ToLower(ext)
 	var err error
 	switch ext {
@@ -187,7 +191,7 @@ func (a *App) ImportSound(name string, data []byte, ext string) (string, error) 
 		soundsDir = "sounds"
 	}
 	def := sounds.Def{Files: []string{filepath.ToSlash(filepath.Join(soundsDir, file))}, Label: cutLabel(name),
-		Emoji: "🔊", Color: colorFor(id), Mode: sounds.ModeToggle}
+		Emoji: emoji, Color: colorFor(id), Mode: sounds.ModeToggle}
 	return id, a.addDef(id, def)
 }
 
@@ -373,6 +377,11 @@ func (a *App) DeleteSound(id string) error {
 		for k, act := range c.Hotkeys {
 			if a, _, _ := strings.Cut(act, "@"); a == "sound:"+id {
 				delete(c.Hotkeys, k)
+			}
+		}
+		for ev, ref := range c.Events { // звук на событие Dota 2
+			if s, _, _ := strings.Cut(ref, "@"); s == id {
+				delete(c.Events, ev)
 			}
 		}
 	})

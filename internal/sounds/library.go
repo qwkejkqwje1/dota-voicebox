@@ -64,6 +64,8 @@ type Def struct {
 	Seq      bool     `json:"seq,omitempty"`      // играть все файлы подряд (иначе — случайный)
 	Dota     bool     `json:"dota,omitempty"`     // часть модуля Dota 2 (скрыт, когда модуль выключен)
 	Hidden   bool     `json:"hidden,omitempty"`   // служебный звук, не показывается на панели
+	Start    float64  `json:"start,omitempty"`    // обрезка: играть с этой секунды файла
+	End      float64  `json:"end,omitempty"`      // обрезка: до этой секунды (0 — до конца)
 }
 
 type Sound struct {
@@ -82,8 +84,10 @@ type Sound struct {
 	Seq      bool
 	Dota     bool
 	Hidden   bool
-	Pending  bool   // часть фраз ещё синтезируется
-	Err      string // почему звук не загрузился (или загрузился не полностью)
+	Pending  bool    // часть фраз ещё синтезируется
+	Err      string  // почему звук не загрузился (или загрузился не полностью)
+	Start    float64 // обрезка (сек от начала файла)
+	End      float64 // 0 — до конца
 
 	mu   sync.Mutex
 	last time.Time
@@ -177,6 +181,9 @@ func Load(baseDir, soundsDir string, defs map[string]Def, tts TTS, normalize boo
 				continue
 			}
 			id := strings.TrimSuffix(e.Name(), filepath.Ext(e.Name()))
+			if _, ok := defs[id]; ok {
+				continue // описание из конфига всё равно главнее — не декодируем файл дважды
+			}
 			rel := filepath.ToSlash(filepath.Join(soundsDir, e.Name()))
 			s := &Sound{ID: id, Source: "file", Files: []string{rel}, Volume: 1, Mode: ModeToggle}
 			c, err := decodeCached(filepath.Join(dir, e.Name()), normalize)
@@ -194,6 +201,10 @@ func Load(baseDir, soundsDir string, defs map[string]Def, tts TTS, normalize boo
 		s := &Sound{ID: id, Label: d.Label, Source: "config", Files: d.Files, Volume: 1, Bus: ParseBus(d.Bus), Mode: d.Mode,
 			Cooldown: time.Duration(d.Cooldown * float64(time.Second)), Emoji: d.Emoji, Color: d.Color, Category: d.Category,
 			Seq: d.Seq, Dota: d.Dota, Hidden: d.Hidden}
+		trim := Trimmable(d.Files) && (d.Start > 0 || d.End > 0)
+		if trim {
+			s.Start, s.End = d.Start, d.End
+		}
 		if d.Volume > 0 {
 			s.Volume = float32(d.Volume)
 		}
@@ -221,7 +232,13 @@ func Load(baseDir, soundsDir string, defs map[string]Def, tts TTS, normalize boo
 				s.Clips = append(s.Clips, c)
 				continue
 			}
-			c, err := resolve(baseDir, f, normalize)
+			var c Clip
+			var err error
+			if trim {
+				c, err = decodeTrim(absPath(baseDir, f), normalize, d.Start, d.End)
+			} else {
+				c, err = resolve(baseDir, f, normalize)
+			}
 			if err != nil {
 				log.Printf("звук %s (%s): %v", id, f, err)
 				errs = append(errs, err.Error())
@@ -272,21 +289,26 @@ func resolve(baseDir, src string, normalize bool) (Clip, error) {
 	case strings.HasPrefix(src, "tts:"):
 		return nil, fmt.Errorf("синтез речи недоступен на этой системе")
 	}
-	p := src
+	return decodeCached(absPath(baseDir, src), normalize)
+}
+
+// absPath — путь к файлу звука (относительные — от папки программы).
+func absPath(baseDir, p string) string {
 	if !filepath.IsAbs(p) {
 		p = filepath.Join(baseDir, p)
 	}
-	return decodeCached(p, normalize)
+	return p
 }
 
 // ---------- кэш декодирования ----------
 // Перезагрузка конфига не должна заново декодировать все MP3.
 
 type cacheKey struct {
-	path      string
-	size      int64
-	mtime     int64
-	normalize bool
+	path       string
+	size       int64
+	mtime      int64
+	normalize  bool
+	start, end float64 // обрезка
 }
 
 var (
@@ -298,6 +320,12 @@ var (
 )
 
 func decodeCached(path string, normalize bool) (Clip, error) {
+	return decodeTrim(path, normalize, 0, 0)
+}
+
+// decodeTrim — decodeCached с обрезкой [start, end) секунд (end = 0 — до конца).
+// Обрезка — до выравнивания громкости: оно считает уже то, что останется.
+func decodeTrim(path string, normalize bool, start, end float64) (Clip, error) {
 	st, err := os.Stat(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -305,7 +333,7 @@ func decodeCached(path string, normalize bool) (Clip, error) {
 		}
 		return nil, err
 	}
-	k := cacheKey{path, st.Size(), st.ModTime().UnixNano(), normalize}
+	k := cacheKey{path, st.Size(), st.ModTime().UnixNano(), normalize, start, end}
 	cacheMu.Lock()
 	if e, ok := cache[path]; ok && e.key == k {
 		cacheMu.Unlock()
@@ -315,6 +343,9 @@ func decodeCached(path string, normalize bool) (Clip, error) {
 	c, err := DecodeFile(path)
 	if err != nil {
 		return nil, err
+	}
+	if start > 0 || end > 0 {
+		c = TrimClip(c, start, end)
 	}
 	if normalize {
 		c = Normalize(c)
@@ -383,13 +414,15 @@ type Info struct {
 	Hidden   bool     `json:"hidden,omitempty"`
 	Pending  bool     `json:"pending,omitempty"`
 	Error    string   `json:"error,omitempty"`
+	Start    float64  `json:"start,omitempty"` // обрезка
+	End      float64  `json:"end,omitempty"`
 }
 
 func (s *Sound) Info() Info {
 	return Info{ID: s.ID, Label: s.Label, Source: s.Source, Files: s.Files, Duration: math.Round(s.Duration()*10) / 10,
 		Volume: s.Volume, Bus: s.Bus.String(), Cooldown: s.Cooldown.Seconds(), Mode: s.Mode,
 		Emoji: s.Emoji, Color: s.Color, Category: s.Category, Seq: s.Seq, Dota: s.Dota, Hidden: s.Hidden,
-		Pending: s.Pending, Error: s.Err}
+		Pending: s.Pending, Error: s.Err, Start: s.Start, End: s.End}
 }
 
 func (l *Library) Infos() []Info {

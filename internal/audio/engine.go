@@ -70,6 +70,7 @@ type Engine struct {
 	lvMic, lvOut, lvMon              afloat
 	tpOut, tpMon                     afloat
 	rawRec                           atomic.Pointer[recorder]
+	recTap                           atomic.Pointer[recorder] // запись нового звука (после шумоподавления)
 
 	// дополнительные источники (полосы пульта)
 	src            srcManager
@@ -406,6 +407,9 @@ func (e *Engine) onDuplex(out, in []byte, frames uint32) {
 			dn.Process(e.work[:n], e.dnOn.Load(), e.dnStr.Load())
 		}
 		e.gate(e.work)
+		if r := e.recTap.Load(); r != nil {
+			r.write(e.work[:n])
+		}
 		e.vizPre.write(e.work)
 		e.talk(e.work)
 		e.tx.process(e.timbre.Load(), e.work[:n], true, false)

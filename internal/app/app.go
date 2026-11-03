@@ -98,6 +98,7 @@ type App struct {
 
 	presetSave *time.Timer
 	phrases    []string // недавние фразы из меню поверх игры
+	rec        recState // запись и обрезка звуков
 
 	enhMu     sync.Mutex // улучшение голоса: что уже применено
 	enhTimbre string

@@ -644,3 +644,41 @@ table.t tr:last-child td { border-bottom: 0; }
 .eq { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 8px 26px; margin-top: 12px; padding: 14px 16px; border-radius: 12px;
   background: #101116; border: 1px solid var(--line); }
 .eq .full { grid-column: 1 / -1; }
+
+/* ---------- обрезка звука: волна с ручками ---------- */
+.wave { position: relative; height: 112px; border-radius: 10px; background: #101116; border: 1px solid var(--line2); overflow: hidden; cursor: pointer; touch-action: none; user-select: none; --wave: var(--accent2); }
+.wave canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+.wave-sh { position: absolute; top: 0; bottom: 0; left: 0; width: 0; background: rgba(10, 11, 15, .72); pointer-events: none; }
+.wave-sh.r { left: auto; right: 0; width: auto; }
+.wave-h { position: absolute; top: 0; bottom: 0; width: 18px; margin-left: -9px; cursor: ew-resize; outline: none; z-index: 2; }
+.wave-h::before { content: ''; position: absolute; left: 8px; top: 0; bottom: 0; width: 2px; background: var(--accent2); }
+.wave-h::after { content: ''; position: absolute; left: 3px; top: 50%; width: 12px; height: 30px; margin-top: -15px; border-radius: 5px; background: var(--accent); box-shadow: 0 2px 8px rgba(0, 0, 0, .5); }
+.wave-h:focus-visible::after { outline: 2px solid #fff; outline-offset: 1px; }
+.wave-ph { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: #fff; opacity: .9; pointer-events: none; z-index: 1; }
+.trim-row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px; margin-top: 12px; }
+.trim-row .field { width: 104px; }
+.trim-row .field .input { height: 32px; font-variant-numeric: tabular-nums; }
+.trim-len { display: flex; flex-direction: column; gap: 6px; min-width: 64px; }
+.trim-len b { height: 32px; line-height: 32px; font-size: 15px; font-variant-numeric: tabular-nums; }
+.trim-row .play-btn { min-width: 112px; justify-content: center; }
+
+/* ---------- запись с микрофона ---------- */
+.rec-box { display: flex; align-items: center; gap: 20px; padding: 6px 2px 4px; }
+.rec-btn { flex: none; width: 72px; height: 72px; border-radius: 50%; border: 0; cursor: pointer; display: grid; place-items: center;
+  background: radial-gradient(circle at 35% 30%, #f87171, #dc2626); box-shadow: 0 0 0 7px var(--bad-bg), 0 8px 22px rgba(220, 38, 38, .35); transition: transform .12s; }
+.rec-btn:hover { transform: scale(1.05); }
+.rec-btn:focus-visible { outline: 2px solid #fff; outline-offset: 9px; }
+.rec-btn i { width: 24px; height: 24px; border-radius: 50%; background: #fff; transition: border-radius .15s; }
+.rec-btn.on i { width: 22px; height: 22px; border-radius: 5px; }
+.rec-btn.on { animation: recpulse 1.4s ease-in-out infinite; }
+.rec-btn:disabled { opacity: .35; cursor: not-allowed; transform: none; }
+@keyframes recpulse { 50% { box-shadow: 0 0 0 13px rgba(239, 68, 68, .08), 0 8px 22px rgba(220, 38, 38, .35); } }
+.rec-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--bad); animation: recblink 1s steps(2, start) infinite; }
+@keyframes recblink { to { visibility: hidden; } }
+.rec-time { font-variant-numeric: tabular-nums; font-size: 16px; }
+.rec-prog { height: 4px; border-radius: 2px; background: #23252f; overflow: hidden; }
+.rec-prog i { display: block; height: 100%; width: 0; background: var(--bad); transition: width .1s linear; }
+
+/* ---------- звуки на события Dota 2 ---------- */
+.ev-ctl select.input { width: 230px; height: 34px; }
+.seg.sm button { padding: 4px 9px; font-size: 13px; }

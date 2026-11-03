@@ -20,46 +20,123 @@ import (
 
 func (s *Server) api2() map[string]func(*http.Request) (any, error) {
 	return map[string]func(*http.Request) (any, error){
-		"POST /api/play":            s.play,
-		"POST /api/stop":            s.stop,
-		"POST /api/sounds/import":   s.importSounds,
-		"POST /api/sounds/phrase":   s.addPhrase,
-		"POST /api/sounds/builtin":  s.addBuiltin,
-		"POST /api/sounds/update":   s.updateSound,
-		"POST /api/sounds/delete":   s.deleteSound,
-		"POST /api/sounds/order":    s.soundOrder,
-		"POST /api/preset":          s.setPreset,
-		"POST /api/preset/params":   s.presetParams,
-		"POST /api/preset/reset":    s.presetReset,
-		"POST /api/hotkey":          s.bindHotkey,
-		"POST /api/menu":            s.setMenu,
-		"POST /api/menu/preview":    s.menuPreview,
-		"POST /api/wheel":           s.setWheel,
-		"POST /api/wheel/preview":   s.wheelPreview,
-		"GET /api/remote":           s.remoteStatus,
-		"POST /api/remote":          s.setRemote,
-		"POST /api/remote/reset":    s.remoteReset,
-		"POST /api/remote/firewall": s.remoteFirewall,
-		"POST /api/remote/open":     s.remoteOpen,
-		"POST /api/dota":            s.setDota,
-		"POST /api/dota/test":       s.testReminder,
-		"GET /api/tts/voices":       s.ttsVoices,
-		"POST /api/tts/say":         s.ttsSay,
-		"POST /api/tts/retry":       func(*http.Request) (any, error) { go s.App.RetrySpeech(); return nil, nil },
-		"POST /api/emoji/missing":   s.emojiMissing,
-		"POST /api/emoji":           s.emojiSave,
-		"POST /api/settings":        s.settings,
-		"GET /api/devices":          s.devices,
-		"POST /api/action/sync":     s.actionSync,
-		"GET /api/status":           func(*http.Request) (any, error) { return s.App.Status(), nil },
-		"GET /api/menu":             func(*http.Request) (any, error) { return s.App.Menu(), nil },
-		"POST /api/sounds/validate": s.validateSound,
-		"POST /api/sets/save":       s.saveSet,
-		"POST /api/sets/delete":     s.deleteSet,
-		"POST /api/sets/order":      s.setOrder,
-		"POST /api/sets/active":     s.activeSet,
-		"POST /api/bg/preview":      s.bgPreview,
+		"POST /api/play":             s.play,
+		"POST /api/stop":             s.stop,
+		"POST /api/sounds/import":    s.importSounds,
+		"POST /api/sounds/phrase":    s.addPhrase,
+		"POST /api/sounds/builtin":   s.addBuiltin,
+		"POST /api/sounds/update":    s.updateSound,
+		"POST /api/sounds/delete":    s.deleteSound,
+		"POST /api/sounds/order":     s.soundOrder,
+		"POST /api/preset":           s.setPreset,
+		"POST /api/preset/params":    s.presetParams,
+		"POST /api/preset/reset":     s.presetReset,
+		"POST /api/hotkey":           s.bindHotkey,
+		"POST /api/menu":             s.setMenu,
+		"POST /api/menu/preview":     s.menuPreview,
+		"POST /api/wheel":            s.setWheel,
+		"POST /api/wheel/preview":    s.wheelPreview,
+		"GET /api/remote":            s.remoteStatus,
+		"POST /api/remote":           s.setRemote,
+		"POST /api/remote/reset":     s.remoteReset,
+		"POST /api/remote/firewall":  s.remoteFirewall,
+		"POST /api/remote/open":      s.remoteOpen,
+		"POST /api/dota":             s.setDota,
+		"POST /api/dota/test":        s.testReminder,
+		"GET /api/tts/voices":        s.ttsVoices,
+		"POST /api/tts/say":          s.ttsSay,
+		"POST /api/tts/retry":        func(*http.Request) (any, error) { go s.App.RetrySpeech(); return nil, nil },
+		"POST /api/emoji/missing":    s.emojiMissing,
+		"POST /api/emoji":            s.emojiSave,
+		"POST /api/settings":         s.settings,
+		"GET /api/devices":           s.devices,
+		"POST /api/action/sync":      s.actionSync,
+		"GET /api/status":            func(*http.Request) (any, error) { return s.App.Status(), nil },
+		"GET /api/menu":              func(*http.Request) (any, error) { return s.App.Menu(), nil },
+		"POST /api/sounds/validate":  s.validateSound,
+		"POST /api/sets/save":        s.saveSet,
+		"POST /api/sets/delete":      s.deleteSet,
+		"POST /api/sets/order":       s.setOrder,
+		"POST /api/sets/active":      s.activeSet,
+		"POST /api/bg/preview":       s.bgPreview,
+		"GET /api/rec":               func(*http.Request) (any, error) { return s.App.RecStatus(), nil },
+		"POST /api/rec/start":        s.recStart,
+		"POST /api/rec/stop":         func(*http.Request) (any, error) { return s.App.RecStop() },
+		"POST /api/rec/play":         s.recPlay,
+		"POST /api/rec/save":         s.recSave,
+		"POST /api/rec/cancel":       func(*http.Request) (any, error) { s.App.RecDiscard(); return nil, nil },
+		"GET /api/sounds/wave":       func(r *http.Request) (any, error) { return s.App.SoundWave(r.URL.Query().Get("id")) },
+		"POST /api/sounds/wave/play": s.wavePlay,
+		"POST /api/sounds/wave/done": func(*http.Request) (any, error) { s.App.WaveDone(); return nil, nil },
+		"POST /api/sounds/trim":      s.trimSound,
+		"POST /api/dota/events":      s.dotaEvent,
 	}
+}
+
+// rangeReq — кусок звука: с какой секунды и до какой (0 — до конца).
+type rangeReq struct {
+	ID     string  `json:"id"`
+	Start  float64 `json:"start"`
+	End    float64 `json:"end"`
+	Effect bool    `json:"effect"` // запись — с эффектом голоса
+	Name   string  `json:"name"`
+}
+
+func (s *Server) recStart(*http.Request) (any, error) {
+	if err := s.App.RecStart(); err != nil {
+		return nil, err
+	}
+	return s.App.RecStatus(), nil
+}
+
+func (s *Server) recPlay(r *http.Request) (any, error) {
+	var req rangeReq
+	if err := decode(r, &req); err != nil {
+		return nil, err
+	}
+	return nil, s.App.RecPlay(req.Start, req.End, req.Effect)
+}
+
+func (s *Server) recSave(r *http.Request) (any, error) {
+	var req rangeReq
+	if err := decode(r, &req); err != nil {
+		return nil, err
+	}
+	id, err := s.App.RecSave(req.Name, req.Start, req.End, req.Effect)
+	if err != nil {
+		return nil, err
+	}
+	log.Printf("Записан звук: %s", id)
+	st, _ := s.state(r)
+	return map[string]any{"id": id, "state": st}, nil
+}
+
+func (s *Server) wavePlay(r *http.Request) (any, error) {
+	var req rangeReq
+	if err := decode(r, &req); err != nil {
+		return nil, err
+	}
+	return nil, s.App.PlayRange(req.ID, req.Start, req.End)
+}
+
+func (s *Server) trimSound(r *http.Request) (any, error) {
+	var req rangeReq
+	if err := decode(r, &req); err != nil {
+		return nil, err
+	}
+	return s.ok(r, s.App.TrimSound(req.ID, req.Start, req.End))
+}
+
+func (s *Server) dotaEvent(r *http.Request) (any, error) {
+	var req struct {
+		Event string `json:"event"`
+		Sound string `json:"sound"`
+		To    string `json:"to"`
+	}
+	if err := decode(r, &req); err != nil {
+		return nil, err
+	}
+	return s.ok(r, s.App.SetEventSound(req.Event, req.Sound, req.To))
 }
 
 // soundView — плитка для интерфейса.

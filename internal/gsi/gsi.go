@@ -7,6 +7,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 )
@@ -76,6 +77,12 @@ const (
 	EvDefeat    = "defeat"
 )
 
+// team — настоящая команда (radiant, dire), а не "none" или зритель.
+func team(t string) bool {
+	t = strings.ToLower(t)
+	return t != "" && t != "none" && t != "spectator"
+}
+
 // Diff сравнивает два состояния и возвращает события.
 func Diff(prev, cur *State, lowHP int) []string {
 	if cur == nil || cur.Map == nil {
@@ -92,14 +99,15 @@ func Diff(prev, cur *State, lowHP int) []string {
 			ev = append(ev, EvGameStart)
 		case PreGame:
 			ev = append(ev, EvPreGame)
-		case PostGame:
-			if cur.Player != nil && cm.WinTeam != "" && cm.WinTeam != "none" {
-				if cm.WinTeam == cur.Player.TeamName {
-					ev = append(ev, EvVictory)
-				} else {
-					ev = append(ev, EvDefeat)
-				}
-			}
+		}
+	}
+	// конец матча: победитель приходит вместе с POST_GAME или следующим пакетом — событие один раз
+	if cm.GameState == PostGame && team(cm.WinTeam) && cur.Player != nil && team(cur.Player.TeamName) &&
+		(pm.GameState != PostGame || !team(pm.WinTeam)) {
+		if strings.EqualFold(cm.WinTeam, cur.Player.TeamName) {
+			ev = append(ev, EvVictory)
+		} else {
+			ev = append(ev, EvDefeat)
 		}
 	}
 	if cm.GameState == InProgress && pm.Daytime != cm.Daytime {

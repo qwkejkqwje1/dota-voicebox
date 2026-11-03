@@ -29,3 +29,38 @@ func TestDiff(t *testing.T) {
 		t.Error("лишняя смерть")
 	}
 }
+
+func TestVictoryDefeat(t *testing.T) {
+	const run = `{"map":{"matchid":"7","game_state":"DOTA_GAMERULES_STATE_GAME_IN_PROGRESS","win_team":"none"},"player":{"team_name":"radiant"}}`
+	evs := func(a, b string) []string { return Diff(st(a), st(b), 25) }
+	has := func(l []string, e string) bool {
+		for _, x := range l {
+			if x == e {
+				return true
+			}
+		}
+		return false
+	}
+	// победитель — сразу с концом матча
+	won := `{"map":{"matchid":"7","game_state":"DOTA_GAMERULES_STATE_POST_GAME","win_team":"radiant"},"player":{"team_name":"radiant"}}`
+	if e := evs(run, won); !has(e, EvVictory) || has(e, EvDefeat) {
+		t.Fatalf("победа: %v", e)
+	}
+	if e := evs(won, won); has(e, EvVictory) {
+		t.Fatalf("победа второй раз: %v", e)
+	}
+	// победитель — следующим пакетом
+	end := `{"map":{"matchid":"7","game_state":"DOTA_GAMERULES_STATE_POST_GAME","win_team":"none"},"player":{"team_name":"radiant"}}`
+	lost := `{"map":{"matchid":"7","game_state":"DOTA_GAMERULES_STATE_POST_GAME","win_team":"dire"},"player":{"team_name":"radiant"}}`
+	if e := evs(run, end); has(e, EvVictory) || has(e, EvDefeat) {
+		t.Fatalf("победителя ещё нет: %v", e)
+	}
+	if e := evs(end, lost); !has(e, EvDefeat) || has(e, EvVictory) {
+		t.Fatalf("поражение: %v", e)
+	}
+	// зритель — ни победы, ни поражения
+	spec := `{"map":{"matchid":"7","game_state":"DOTA_GAMERULES_STATE_POST_GAME","win_team":"dire"},"player":{}}`
+	if e := evs(run, spec); has(e, EvVictory) || has(e, EvDefeat) {
+		t.Fatalf("зритель: %v", e)
+	}
+}

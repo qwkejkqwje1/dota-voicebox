@@ -1,8 +1,8 @@
 // Модуль Dota 2: включается одной кнопкой. Кнопки-оповещения, голосовые тайминги, Рошан, игровое время.
 import {app, h, api, act, toast, onLive, kbd, bindKey, fmtTime, parseTime, slider, seg, toggle, setrow, sectionH, dialog,
-  confirmDlg, promptDlg, select, playSound, clone, plural, hint} from '../core.js';
+  confirmDlg, promptDlg, select, playSound, clone, plural, hint, requestRender} from '../core.js';
 import {checkRows, DOTA_CHECKS, autoSetup, loadSetup} from './check.js';
-import {addDialog, editSound} from './sounds.js';
+import {addDialog, editSound, importFiles} from './sounds.js';
 
 const dotaCfg = () => clone(app.state.config.dota);
 const saveDota = (d, opt) => act('/api/dota', {dota: d}, opt);
@@ -72,7 +72,53 @@ function onView(d) {
       tiles.set(s.id, el);
       return el;
     })) : h('p', {class: 'hint'}, 'Кнопок пока нет — добавьте свою.'),
+    eventsCard(),
     remindersCard(d));
+}
+
+// ---------- звуки на события матча ----------
+const EV_ICON = {victory: '🏆', defeat: '💀', game_start: '📯', pregame: '⏳', kill: '🗡️', death: '☠️', respawn: '🔄', streak_3: '🔥', streak_5: '🔥',
+  streak_10: '🔥', low_hp: '🩸', level_6: '⭐', smoked: '💨', day: '☀️', night: '🌙', rosh_killed: '🐲'};
+const EV_SUB = {victory: 'Ваша команда выиграла — сразу, как появится экран победы', defeat: 'Ваша команда проиграла'};
+const MAIN_EV = ['victory', 'defeat'];
+let moreEv = false;
+function eventsCard() {
+  const evs = app.state.events || [], cur = app.state.config.events || {};
+  const all = app.state.sounds || [], byId = new Map(all.map(s => [s.id, s]));
+  const mine = all.filter(s => !s.hidden && s.kind !== 'builtin').sort((a, b) => a.title.localeCompare(b.title, 'ru'));
+  const built = app.state.builtins || [];
+  const row = ev => {
+    const [id, bus0] = (cur[ev.id] || '').split('@');
+    const snd = id ? byId.get(id) : null;
+    const bus = (bus0 || (snd && snd.bus) || 'both') === 'monitor' ? 'monitor' : 'both';
+    const to = id ? bus : MAIN_EV.includes(ev.id) ? 'both' : 'monitor'; // победу и поражение по умолчанию слышат все
+    const save = (sound, t, ok) => act('/api/dota/events', {event: ev.id, sound, to: sound ? t : ''}, {ok});
+    const opts = [['', '— без звука —'],
+      {group: 'Ваши звуки', items: mine.map(s => [s.id, (s.emoji || '🔊') + ' ' + s.title])},
+      {group: 'Встроенные', items: built.map(b => [b.id, (b.emoji || '🔊') + ' ' + (b.label || b.id)])}];
+    if (id && !mine.some(s => s.id === id) && !built.some(b => b.id === id)) opts.splice(1, 0, [id, snd ? (snd.emoji || '🔊') + ' ' + snd.title : '⚠️ ' + id + ' (нет такого звука)']);
+    const file = h('input', {type: 'file', class: 'hidden', accept: 'audio/*,video/*,.mp3,.wav,.ogg,.flac,.m4a,.opus,.webm', onchange: async e => {
+      const f = e.target.files[0];
+      if (!f) return;
+      const ids = [];
+      if (await importFiles([f], undefined, ids) && ids[0]) save(ids[0], to, '✅ ' + ev.label + ': «' + f.name.replace(/\.[^.]+$/, '') + '»');
+    }});
+    return setrow((EV_ICON[ev.id] || '🔔') + ' ' + ev.label, EV_SUB[ev.id] || '',
+      h('div', {class: 'row nowrap ev-ctl'},
+        select(opts, id || '', v => save(v, to, v ? '✅ ' + ev.label + ': звук выбран' : ev.label + ': без звука'), {title: 'Какой звук играет'}),
+        id ? seg([['both', '📡 Все'], ['monitor', '🎧 Только я']], bus, v => save(id, v), {cls: 'sm'}) : null,
+        id ? h('button', {class: 'btn sm icon ghost', title: 'Послушать самому', onclick: () => playSound(id, 'monitor')}, '▶') : null,
+        h('button', {class: 'btn sm icon ghost', title: 'Загрузить свой файл (MP3, WAV, OGG…) и поставить сюда', onclick: () => file.click()}, '📁'), file));
+  };
+  const rest = evs.filter(e => !MAIN_EV.includes(e.id)), restOn = rest.filter(e => cur[e.id]).length;
+  return h('div', {},
+    sectionH('🏆 Звуки на события', 'играют сами по данным из игры'),
+    h('div', {class: 'card'},
+      evs.filter(e => MAIN_EV.includes(e.id)).map(row),
+      h('div', {style: 'padding-top:8px'}, h('button', {class: 'btn sm ghost', onclick: () => { moreEv = !moreEv; requestRender(); }},
+        (moreEv ? '− Скрыть другие события' : '＋ Другие события: убийство, смерть, Рошан, ночь…') + (restOn ? ' · настроено: ' + restOn : ''))),
+      moreEv ? rest.map(row) : null,
+      h('p', {class: 'hint', style: 'margin:10px 0 0'}, '💡 Свой гимн — кнопка 📁 или любой звук с панели. Остановить — «⏹ Стоп» на панели звуков или клавиша «Остановить все звуки».')));
 }
 
 function gameBox(st) {

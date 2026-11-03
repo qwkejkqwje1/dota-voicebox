@@ -1,6 +1,7 @@
 // Звуки — панель плиток: клик — в эфир, 🎧 — послушать самому, правый клик — настроить.
 import {app, h, api, act, set, toast, setState, requestRender, onLive, kbd, keyLabel, fmtDur, dialog, confirmDlg, captureKey, emojiPicker, colorPicker,
-  slider, seg, select, toggle, playSound, empty, hotkeyOwner, actionLabel, bindKey, clone} from '../core.js';
+  slider, seg, select, toggle, playSound, empty, hotkeyOwner, actionLabel, bindKey, clone, meter, hint} from '../core.js';
+import {trimEditor, trimDialog, canTrim, presetTitle, fmtT} from '../wave.js';
 
 let filter = 'all';
 let query = '';
@@ -22,6 +23,7 @@ export default function soundsPage() {
     return h('div', {},
       empty('🔊', 'Здесь будут ваши звуки', 'Перетащите в окно файлы MP3, WAV или OGG, добавьте фразу для озвучки или выберите встроенный звук. Нажатие на плитку — и звук слышат все в голосовом чате.',
         h('button', {class: 'btn primary lg', onclick: () => addDialog('file')}, '＋ Добавить звук'),
+        h('button', {class: 'btn lg', onclick: () => addDialog('rec')}, '🎙️ Записать с микрофона'),
         h('button', {class: 'btn lg', onclick: () => addDialog('builtin')}, '✨ Встроенные звуки')));
   }
   const cur = curSet();
@@ -88,6 +90,7 @@ export default function soundsPage() {
       h('div', {class: 'grow'}),
       allSets().length ? null : h('button', {class: 'btn ghost', title: 'Свои плитки для каждой игры: включаются сами, когда игра на экране', onclick: () => setDialog()}, '🗂️ Наборы для игр'),
       h('button', {class: 'btn ghost', title: 'Остановить все звуки', onclick: () => act('/api/stop', {})}, '⏹ Стоп'),
+      h('button', {class: 'btn', title: 'Записать звук с микрофона', onclick: () => addDialog('rec')}, '🎙️ Записать'),
       h('button', {class: 'btn primary', onclick: () => addDialog('file')}, '＋ Добавить')),
     body,
     h('p', {class: 'hint', style: 'margin-top:16px'}, cur
@@ -233,6 +236,7 @@ function meta(s) {
   if (s.bus === 'monitor') out.push(h('span', {title: 'Слышите только вы'}, '🎧 только вам'));
   if (s.bus === 'voice') out.push(h('span', {title: 'Только в эфир, вы не слышите'}, '📡 в эфир'));
   if (s.in_menu) out.push(h('span', {title: 'Есть в быстром меню'}, '⚡'));
+  if (s.start || s.end) out.push(h('span', {title: 'Обрезан: ' + fmtT(s.start || 0) + ' – ' + (s.end ? fmtT(s.end) : 'конец')}, '✂️'));
   return out;
 }
 
@@ -298,9 +302,10 @@ export function editSound(id) {
   let inSets = sets.filter(x => (x.sounds || []).includes(s.id)).map(x => x.id);
   const setsKey = l => l.slice().sort().join('\n'), sets0 = setsKey(inSets);
   const d = dialog({title: 'Настройка звука', wide: true, body: () => {
+    const cur = app.state.sounds.find(x => x.id === s.id) || s; // после обрезки — новая длина
     const prev = h('div', {class: 'tile', style: {'--c': e.color, width: '170px', cursor: 'default', flex: 'none'}},
       h('div', {class: 't-top'}, h('div', {class: 'emo'}, e.emoji), hotkey ? h('span', {class: 'hk'}, kbd(hotkey)) : null),
-      h('div', {class: 't-title'}, e.label || 'Без названия'), h('div', {class: 't-meta'}, fmtDur(s.duration)));
+      h('div', {class: 't-title'}, e.label || 'Без названия'), h('div', {class: 't-meta'}, fmtDur(cur.duration)));
     return [
       h('div', {class: 'row nowrap', style: 'align-items:flex-start;gap:18px'}, prev,
         h('div', {class: 'col grow', style: 'gap:12px'},
@@ -329,7 +334,8 @@ export function editSound(id) {
             inSets = inSets.includes(x.id) ? inSets.filter(y => y !== x.id) : inSets.concat(x.id);
             ev.currentTarget.classList.toggle('on', inSets.includes(x.id));
           }}, h('span', {class: 'pe'}, x.emoji || '🗂️'), h('span', {}, x.name))))) : null),
-      h('p', {class: 'hint mt', style: 'word-break:break-all'}, 'Источник: ', (s.files || []).map(f => f.replace(/^builtin:/, 'встроенный: ').replace(/^tts:/, 'фраза: ')).join(' + ') || s.id),
+      h('p', {class: 'hint mt', style: 'word-break:break-all'}, 'Источник: ', (s.files || []).map(f => f.replace(/^builtin:/, 'встроенный: ').replace(/^tts:/, 'фраза: ')).join(' + ') || s.id,
+        cur.start || cur.end ? ' · ✂️ обрезан: ' + fmtT(cur.start || 0) + ' – ' + (cur.end ? fmtT(cur.end) : 'конец') : null),
     ];
   }, foot: () => [
     h('button', {class: 'btn danger', onclick: async () => {
@@ -337,6 +343,7 @@ export function editSound(id) {
       if (await act('/api/sounds/delete', {id: s.id}, {ok: 'Звук удалён'})) d.close();
     }}, '🗑 Удалить'),
     h('div', {class: 'grow'}),
+    canTrim(s) ? h('button', {class: 'btn', title: 'Срезать тишину или лишнее начало и конец', onclick: () => trimDialog(s, () => { if (!d.closed) d.update(); })}, '✂️ Обрезать') : null,
     h('button', {class: 'btn', title: 'Только в наушники', onclick: () => playSound(s.id, 'monitor')}, '🎧 Послушать'),
     h('button', {class: 'btn', onclick: () => d.close()}, 'Отмена'),
     h('button', {class: 'btn primary', onclick: async () => {
@@ -354,9 +361,11 @@ export function addDialog(tab = 'file', opts = {}) {
   let files = [];   // {name, state: '…'|'ok'|'err', msg}
   let phrase = '', pEmoji = opts.dota ? '📣' : '🗣️';
   const builtins = app.state.builtins || [];
-  const d = dialog({title: opts.dota ? 'Новая кнопка-оповещение' : 'Добавить звук', wide: true, body: () => {
-    const tabs = opts.dota ? null : h('div', {class: 'tabs'}, [['file', '📁 Файл'], ['phrase', '🗣️ Фраза'], ['builtin', '✨ Встроенные']].map(([v, l]) =>
-      h('button', {class: tab === v ? 'on' : '', onclick: () => { tab = v; d.update(); }}, l)));
+  const rec = recorder(() => d);
+  const d = dialog({title: opts.dota ? 'Новая кнопка-оповещение' : 'Добавить звук', wide: true, onClose: () => rec.reset(), body: () => {
+    const tabs = opts.dota ? null : h('div', {class: 'tabs'}, [['file', '📁 Файл'], ['rec', '🎙️ Запись'], ['phrase', '🗣️ Фраза'], ['builtin', '✨ Встроенные']].map(([v, l]) =>
+      h('button', {class: tab === v ? 'on' : '', onclick: () => { if (tab === 'rec' && v !== 'rec') rec.reset(); tab = v; d.update(); }}, l)));
+    if (tab === 'rec') return [tabs, rec.body()];
     if (tab === 'file') {
       const inp = h('input', {type: 'file', multiple: true, accept: 'audio/*,video/*,.mp3,.wav,.ogg,.flac,.m4a,.opus,.webm', class: 'hidden',
         onchange: ev => upload([...ev.target.files])});
@@ -385,6 +394,7 @@ export function addDialog(tab = 'file', opts = {}) {
           have.has(b.id) ? h('span', {class: 'btn sm icon ghost ok', title: 'Уже на панели', style: 'cursor:default'}, '✓')
             : h('button', {class: 'btn sm icon', title: 'Добавить на панель', onclick: async () => { if (await act('/api/sounds/builtin', {name: b.id}, {ok: '✅ ' + (b.label || b.id) + ' — на панели'})) d.update(); }}, '+'))))])];
   }, foot: () => {
+    if (tab === 'rec') return rec.foot();
     if (tab === 'phrase') return [h('div', {class: 'grow'}),
       h('button', {class: 'btn', onclick: () => phrase.trim() ? act('/api/tts/say', {text: phrase, to: 'monitor'}) : toast('Напишите фразу', 'err')}, '🎧 Послушать'),
       h('button', {class: 'btn primary', onclick: async () => {
@@ -402,8 +412,107 @@ export function addDialog(tab = 'file', opts = {}) {
   }
 }
 
+// ---------- запись с микрофона ----------
+const clock = sec => Math.floor(sec / 60) + ':' + String(Math.floor(sec % 60)).padStart(2, '0');
+// recorder — вкладка «Запись»: записать → обрезать → сохранить звуком на панели. dlg() — окно.
+function recorder(dlg) {
+  const r = {phase: 'idle', wave: null, ed: null, name: '', effect: false, poll: 0, busy: false, max: 60};
+  const time = h('b', {class: 'rec-time'}, '0:00');
+  const bar = h('i', {});
+  const upd = () => { const d = dlg(); if (d && !d.closed) d.update(); };
+  async function start() {
+    if (r.busy) return;
+    r.busy = true;
+    try { const st = await api('/api/rec/start', {}); r.max = st.max || 60; } catch (e) { toast(e.message, 'err'); r.busy = false; return; }
+    r.busy = false;
+    r.phase = 'rec';
+    time.textContent = '0:00'; bar.style.width = '0';
+    upd();
+    r.poll = setInterval(async () => {
+      let st;
+      try { st = await api('/api/rec'); } catch (e) { return; }
+      if (r.phase !== 'rec') return;
+      time.textContent = clock(st.sec || 0);
+      bar.style.width = Math.min(100, (st.sec || 0) / r.max * 100) + '%';
+      if (st.full || !st.active) stop();
+    }, 100);
+  }
+  async function stop() {
+    clearInterval(r.poll); r.poll = 0;
+    if (r.phase !== 'rec' || r.busy) return;
+    r.busy = true;
+    let w;
+    try { w = await api('/api/rec/stop', {}); } catch (e) { toast(e.message, 'err'); r.phase = 'idle'; r.busy = false; upd(); return; }
+    r.busy = false;
+    r.wave = w;
+    // сразу без тишины по краям — её почти всегда нужно срезать
+    r.ed = trimEditor({wave: {...w, start: w.sound[0], end: w.sound[1]},
+      play: (a, b) => api('/api/rec/play', {start: a, end: b, effect: r.effect}),
+      stop: () => api('/api/play', {id: 'preview', stop: true}).catch(() => {})});
+    r.phase = 'done';
+    upd();
+  }
+  async function reset() {
+    clearInterval(r.poll); r.poll = 0;
+    if (r.ed) r.ed.stop();
+    const was = r.phase;
+    r.phase = 'idle'; r.wave = r.ed = null;
+    if (was !== 'idle' && was !== 'saved') await api('/api/rec/cancel', {}).catch(() => {});
+  }
+  const micOff = () => !!(app.state.config.mic || {}).mute;
+  function body() {
+    if (r.phase === 'rec') {
+      const btn = h('button', {class: 'rec-btn on', title: 'Остановить запись (пробел)', onclick: stop}, h('i'));
+      setTimeout(() => btn.focus());
+      return h('div', {class: 'rec-box on'}, btn,
+        h('div', {class: 'grow'},
+          h('div', {class: 'row', style: 'gap:8px'}, h('span', {class: 'rec-dot'}), h('b', {}, 'Идёт запись'), time, h('span', {class: 'faint'}, 'из ' + clock(r.max))),
+          h('div', {class: 'rec-prog mt-s'}, bar),
+          h('div', {class: 'mt-s'}, meter('mic_in', {big: true, title: 'Громкость микрофона'}))));
+    }
+    if (r.phase === 'done') {
+      const fx = presetTitle();
+      return [
+        r.wave.silent ? hint('🤫 Похоже, микрофон молчал. Проверьте его на странице «Голос» и запишите ещё раз.', 'warn') : null,
+        r.ed.el,
+        h('div', {class: 'form mt'},
+          h('label', {class: 'field'}, h('span', {}, 'Название'),
+            h('input', {class: 'input', value: r.name, maxlength: 40, placeholder: 'Например: Мой клич', oninput: ev => { r.name = ev.target.value; }})),
+          fx ? h('div', {class: 'col', style: 'justify-content:flex-end'},
+            toggle(r.effect, v => { r.effect = v; }, {label: 'С эффектом голоса «' + fx + '»', title: 'Записать так, как вас слышит команда: тембр и текущий эффект'})) : null),
+        h('p', {class: 'hint mt'}, '💡 Тишину по краям уже срезали — подвиньте ручки, если нужно. ▶ — послушать самому.')];
+    }
+    const off = micOff();
+    const btn = h('button', {class: 'rec-btn', title: 'Начать запись', disabled: off, onclick: start}, h('i'));
+    if (!off) setTimeout(() => btn.isConnected && btn.focus());
+    return [
+      h('div', {class: 'rec-box'}, btn,
+        h('div', {class: 'grow'}, h('b', {}, 'Запишите звук с микрофона'),
+          h('p', {class: 'hint', style: 'margin:4px 0 10px'}, 'Фразу, клич, смех — до ' + clock(r.max).replace(/^0:/, '') + ' секунд. Шумоподавление уже работает, эффект голоса можно добавить после записи. Тишину по краям программа срежет сама.'),
+          meter('mic_in', {big: true, title: 'Громкость микрофона'}))),
+      off ? hint(['🔇 Микрофон выключен. ', h('button', {class: 'btn sm primary', style: 'margin-left:6px', onclick: async () => {
+        await set({mic_mute: false}, {ok: '🎙️ Микрофон включён'}); upd();
+      }}, 'Включить')], 'warn') : null];
+  }
+  function foot() {
+    if (r.phase !== 'done') return [h('div', {class: 'grow'}), h('button', {class: 'btn', onclick: () => dlg().close()}, 'Закрыть')];
+    return [
+      h('button', {class: 'btn ghost', onclick: async () => { await reset(); start(); }}, '🎙️ Записать заново'),
+      h('div', {class: 'grow'}),
+      h('button', {class: 'btn', onclick: () => dlg().close()}, 'Отмена'),
+      h('button', {class: 'btn primary', onclick: async () => {
+        const [a, b] = r.ed.get();
+        const name = r.name.trim();
+        const res = await act('/api/rec/save', {name, start: a, end: b, effect: r.effect}, {ok: '✅ ' + (name ? '«' + name + '»' : 'Запись') + ' — на панели'});
+        if (res && res.id) { r.ed.stop(); r.phase = 'saved'; dlg().close(); }
+      }}, 'Сохранить звук')];
+  }
+  return {body, foot, reset};
+}
+
 // importFiles — добавить файлы: WAV и MP3 — как есть, остальное (и нечитаемые) — перекодировать в WAV прямо в окне.
-export async function importFiles(list, progress = () => {}) {
+// ids — сюда попадут id добавленных звуков.
+export async function importFiles(list, progress = () => {}, ids = []) {
   let added = 0, failed = 0;
   for (let i = 0; i < list.length; i++) {
     const f = list[i];
@@ -422,6 +531,7 @@ export async function importFiles(list, progress = () => {}) {
       const fd = new FormData();
       fd.append('files', blob, fname);
       const r = await api('/api/sounds/import', fd);
+      if (r.ids) ids.push(...r.ids);
       if (r.state) setState(r.state);
       added++;
       progress(i, 'ok', 'добавлен');

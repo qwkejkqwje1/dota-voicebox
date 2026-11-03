@@ -1,6 +1,7 @@
 package sounds
 
 import (
+	"math"
 	"os"
 	"path/filepath"
 	"testing"
@@ -146,5 +147,81 @@ func TestSeqTTSPendingAndErrors(t *testing.T) {
 	lib = Load(t.TempDir(), "sounds", defs, nil, false)
 	if g = lib.Get("gank"); g.Pending || g.Err == "" || len(g.Clips) != 1 {
 		t.Fatalf("без TTS: %+v", g)
+	}
+}
+
+// полсекунды тишины, секунда тона, полсекунды тишины; в самом начале — щелчок
+func toneWithSilence() Clip {
+	c := make(Clip, 2*SampleRate)
+	for i := SampleRate / 2; i < SampleRate*3/2; i++ {
+		c[i] = float32(0.5 * math.Sin(2*math.Pi*440*float64(i)/SampleRate))
+	}
+	c[100] = 0.9
+	return c
+}
+
+func TestTrimAndSilence(t *testing.T) {
+	c := toneWithSilence()
+	s, e := FindSilence(c)
+	if math.Abs(s-0.42) > 0.015 || math.Abs(e-1.65) > 0.015 {
+		t.Fatalf("звук: %.3f–%.3f, нужно 0,42–1,65", s, e)
+	}
+	// щелчки мыши в начале и в конце записи — не звук; «П» перед гласной — звук
+	burst := func(c Clip, at float64, ms int) {
+		i0 := int(at * SampleRate)
+		for i := 0; i < SampleRate*ms/1000; i++ {
+			c[i0+i] = float32(0.6 * math.Exp(-float64(i)/200) * math.Sin(float64(i)))
+		}
+	}
+	k := toneWithSilence()
+	burst(k, 0.05, 15)
+	burst(k, 1.85, 15)
+	if s, e := FindSilence(k); math.Abs(s-0.42) > 0.015 || math.Abs(e-1.65) > 0.015 {
+		t.Fatalf("со щелчками: %.3f–%.3f, нужно 0,42–1,65", s, e)
+	}
+	burst(k, 0.44, 15)
+	if s, _ := FindSilence(k); math.Abs(s-0.36) > 0.015 {
+		t.Fatalf("согласная перед звуком срезана: %.3f, нужно 0,36", s)
+	}
+	clap := make(Clip, 2*SampleRate)
+	burst(clap, 1, 25)
+	if s, e := FindSilence(clap); math.Abs(s-0.92) > 0.015 || math.Abs(e-1.18) > 0.015 {
+		t.Fatalf("хлопок: %.3f–%.3f, нужно 0,92–1,18", s, e)
+	}
+	tr := TrimClip(c, 0.5, 1.5)
+	if len(tr) != SampleRate || tr[0] != 0 || tr[len(tr)-1] != 0 {
+		t.Fatalf("обрезка: %d сэмплов, края %v %v", len(tr), tr[0], tr[len(tr)-1])
+	}
+	if len(TrimClip(c, 1.9, 1.92)) != len(c) || len(TrimClip(c, 3, 0)) != len(c) {
+		t.Fatal("слишком короткий или неправильный кусок — весь клип")
+	}
+	if p := Peaks(c, 4); len(p) != 4 || p[0] < 0.89 || p[1] < 0.49 || p[3] != 0 {
+		t.Fatalf("волна: %v", p)
+	}
+	if s, e := FindSilence(make(Clip, SampleRate)); s != 0 || e != 1 {
+		t.Fatalf("тишина: %v %v", s, e)
+	}
+	q := append(Clip(nil), c...)
+	PeakNormalize(q, 0.89, 20)
+	if p := Peaks(q, 1)[0]; math.Abs(float64(p)-0.89) > 0.001 {
+		t.Fatalf("пик: %v", p)
+	}
+}
+
+func TestLoadTrimmed(t *testing.T) {
+	dir := t.TempDir()
+	os.MkdirAll(filepath.Join(dir, "sounds"), 0o755)
+	os.WriteFile(filepath.Join(dir, "sounds", "x.wav"), EncodeWAV16(toneWithSilence()), 0o644)
+	lib := Load(dir, "sounds", map[string]Def{"x": {Files: []string{"sounds/x.wav"}, Start: 0.5}}, nil, false)
+	if s := lib.Get("x"); s == nil || math.Abs(s.Duration()-1.5) > 0.001 || s.Start != 0.5 || s.Info().Start != 0.5 {
+		t.Fatalf("обрезанный звук: %+v", s)
+	}
+	lib = Load(dir, "sounds", map[string]Def{"x": {Files: []string{"sounds/x.wav"}, Start: 0.5, End: 1.5}}, nil, false)
+	if d := lib.Get("x").Duration(); math.Abs(d-1) > 0.001 {
+		t.Fatalf("обрезка 0,5–1,5: %v", d)
+	}
+	lib = Load(dir, "sounds", nil, nil, false)
+	if d := lib.Get("x").Duration(); d != 2 {
+		t.Fatalf("без обрезки: %v", d)
 	}
 }
