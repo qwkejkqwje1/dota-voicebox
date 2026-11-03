@@ -59,7 +59,7 @@ func (a *App) applyTalk(cfg *config.Config, gameVK uint32) {
 	var vk uint32
 	if mode != "always" {
 		if c, err := keys.Parse(key); err != nil || key == "" {
-			log.Print("⚠ Режим «по кнопке»: кнопка не назначена — микрофон работает всегда. Назначьте кнопку на вкладке «Пульт».")
+			log.Print("⚠ Режим «по кнопке»: кнопка не назначена — микрофон работает всегда. Назначьте кнопку на странице «Голос».")
 			mode = "always"
 		} else {
 			vk = c.VK
@@ -141,7 +141,7 @@ func (a *App) TalkToggle() {
 	a.talk.mu.Lock()
 	defer a.talk.mu.Unlock()
 	if a.talk.mode == "always" {
-		log.Print("Режим «по кнопке» выключен — включите его на вкладке «Пульт»")
+		log.Print("Режим «по кнопке» выключен — включите его на странице «Голос»")
 		return
 	}
 	a.talkToggleLocked()

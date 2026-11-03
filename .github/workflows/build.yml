@@ -35,11 +35,13 @@ jobs:
         run: |
           VER="${GITHUB_REF_NAME}"
           go build -trimpath -ldflags "-s -w -H windowsgui -X main.version=${VER}" -o dist/voicebox.exe ./cmd/voicebox
-          cp config.example.json dist/config.json
-          cp README.md dist/
+          cp config.example.json dist/
+          cp README.md CHANGELOG.md dist/
           mkdir -p dist/sounds dist/gsi
           cp sounds/README.md dist/sounds/
           cp gsi/*.cfg dist/gsi/
+          mkdir -p dist/licenses
+          cp internal/rnnoise/COPYING dist/licenses/rnnoise.txt
       - name: Sign update
         if: startsWith(github.ref, 'refs/tags/v')
         shell: bash

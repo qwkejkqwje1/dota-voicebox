@@ -1,4 +1,6 @@
-// Dota VoiceBox — саундпад + пресеты голоса + таймеры рун для Dota 2.
+// VoiceBox — саундпад и эффекты голоса через виртуальный кабель: звуки и голос в любой
+// голосовой чат. Быстрое меню поверх игры, значок в трее, модуль Dota 2 (тревога «ганк на мид»,
+// голосовые напоминания о рунах).
 package main
 
 import (
@@ -17,8 +19,9 @@ import (
 	"github.com/qwkejkqwje1/dota-voicebox/internal/audio"
 	"github.com/qwkejkqwje1/dota-voicebox/internal/combo"
 	"github.com/qwkejkqwje1/dota-voicebox/internal/config"
-	"github.com/qwkejkqwje1/dota-voicebox/internal/gsi"
+	"github.com/qwkejkqwje1/dota-voicebox/internal/keys"
 	"github.com/qwkejkqwje1/dota-voicebox/internal/logbus"
+	"github.com/qwkejkqwje1/dota-voicebox/internal/overlay"
 	"github.com/qwkejkqwje1/dota-voicebox/internal/sounds"
 	"github.com/qwkejkqwje1/dota-voicebox/internal/ui"
 	"github.com/qwkejkqwje1/dota-voicebox/internal/update"
@@ -48,7 +51,7 @@ func main() {
 
 	switch {
 	case *showVer:
-		fmt.Println("Dota VoiceBox", version)
+		fmt.Println("VoiceBox", version)
 		return
 	case *listDev:
 		if err := audio.ListDevices(); err != nil {
@@ -100,6 +103,7 @@ func main() {
 
 	// уже запущена? — показать окно существующей копии и выйти
 	if pingExisting(addr) {
+		winapi.AllowForeground() // разрешить той копии вывести окно на передний план
 		http.Post("http://"+addr+"/api/show", "text/plain", nil)
 		return
 	}
@@ -130,46 +134,19 @@ func main() {
 		defer lf.Close()
 	}
 	log.SetOutput(io.MultiWriter(writers...))
-	log.Printf("Dota VoiceBox %s запущен", version)
+	log.Printf("VoiceBox %s запущен", version)
 	winapi.SetHighPriority()
 
 	eng := audio.NewEngine()
 	a := app.New(abs, eng)
 	a.Version = version
-	a.AttachHotkeys()
-	if err := a.Reload(); err != nil {
-		fatal("Ошибка конфига: %v", err)
-	}
-	go a.PTTLoop()
-	go a.ClockLoop()
-	keyCh := make(chan combo.Event, 512)
-	if err := winapi.StartKeyHook(keyCh); err != nil {
-		log.Printf("Перехват клавиш для скриптов недоступен: %v", err)
-	} else {
-		go func() {
-			for ev := range keyCh {
-				a.KeyEvent(ev)
-			}
-		}()
-	}
-	go a.WatchConfig()
-	go a.Watchdog()
-	if !cfg.SetupDone {
-		go a.AutoSetup(false)
-	}
-	if cfg.GSI.Enabled {
-		srv := &gsi.Server{Addr: cfg.GSI.Addr, Token: cfg.GSI.Token, OnState: a.OnGSI}
-		go func() {
-			log.Printf("GSI: жду Dota 2 на http://%s/", cfg.GSI.Addr)
-			if err := srv.Run(); err != nil {
-				log.Printf("GSI сервер: %v", err)
-			}
-		}()
-	}
 
 	showCh := make(chan struct{}, 1)
 	quitCh := make(chan struct{}, 1)
 	show := func() {
+		if ui.FocusWindow() { // окно уже открыто — поднять его
+			return
+		}
 		select {
 		case showCh <- struct{}{}:
 		default:
@@ -180,13 +157,82 @@ func main() {
 		case quitCh <- struct{}{}:
 		default:
 		}
+		ui.CloseWindow()
 	}
 	a.OnShowUI = show
 
+	// значок в трее, быстрое меню и уведомления поверх игры
+	emoji := &overlay.FileEmoji{Dir: filepath.Join(base, "cache", "emoji")}
+	rend := &overlay.Renderer{F: overlay.LoadFonts(), Emoji: emoji}
+	var shell *winapi.Shell
+	shell, err = winapi.StartShell(winapi.ShellOptions{
+		Tooltip:  "VoiceBox",
+		Menu:     &overlay.Controller{R: rend, Src: menuSource{a}},
+		Wheel:    &overlay.WheelCtl{Src: wheelSource{a}},
+		R:        rend,
+		TrayMenu: func() []winapi.TrayItem { return trayItems(a) },
+		OnTray:   func(id string) { trayAction(a, shell, id, show, quit) },
+		OnMenuMoved: func(x, y float64) {
+			if err := a.MoveQuickMenu(x, y); err != nil {
+				log.Printf("быстрое меню: не удалось запомнить место: %v", err)
+			}
+		},
+	})
+	if err != nil {
+		log.Printf("Значок в трее и быстрое меню недоступны: %v", err)
+	}
+	defer shell.Close()
+	a.OnMenu = shell.ToggleMenu
+	if shell != nil {
+		a.OnWheel = shell.OpenWheel
+		a.OnSay = shell.OpenSay
+	}
+	a.OnToast = func(t app.Toast) { shell.Toast(overlay.ToastView{Emoji: t.Emoji, Text: t.Text, Sub: t.Sub}) }
+	remote := &ui.Remote{App: a} // пульт с телефона (свой сервер в домашней сети, если включён)
+	defer remote.Close()
+	a.OnChange = func() {
+		shell.RefreshMenu()
+		shell.SetTooltip(trayTip(a))
+		remote.Apply(a.Config())
+	}
+
+	a.AttachHotkeys()
+	if err := a.Reload(); err != nil {
+		fatal("Ошибка конфига: %v", err)
+	}
+	shell.SetTooltip(trayTip(a))
+	go a.PTTLoop()
+	go a.ClockLoop()
+	keyCh := make(chan combo.Event, 512)
+	if err := winapi.StartKeyHook(keyCh); err != nil {
+		log.Printf("Перехват клавиш недоступен (скрипты, кнопки мыши, клавиши быстрого меню): %v", err)
+	} else {
+		go func() {
+			for ev := range keyCh {
+				a.KeyEvent(ev)
+			}
+		}()
+	}
+	go a.WatchConfig()
+	go a.Watchdog()
+	go a.ForegroundLoop()
+	if !cfg.SetupDone {
+		go a.AutoSetup(false)
+	}
+	defer a.StopGSI()
+
 	upd := update.New(version, exe)
 	a.UpdateStatus = func() any { return upd.Status() }
-	srv := &ui.Server{App: a, Engine: eng, Logs: logs, Token: ui.NewToken(), Addr: addr, OnShow: show, OnQuit: quit,
-		Updater: upd, RestartArgs: restartArgs}
+	token := ui.NewToken()
+	if t := os.Getenv("VOICEBOX_DEV_TOKEN"); t != "" { // для разработки интерфейса в обычном браузере
+		token = t
+	}
+	srv := &ui.Server{App: a, Engine: eng, Logs: logs, Token: token, Addr: addr, OnShow: show, OnQuit: quit,
+		Updater: upd, RestartArgs: restartArgs, Emoji: emoji, Remote: remote, Exe: exe}
+	if shell != nil {
+		srv.OnMenuPreview = shell.OpenMenu
+		srv.OnWheelPreview = func() { shell.OpenWheel(0) }
+	}
 	l, err := srv.Listen()
 	if err != nil {
 		fatal("Порт интерфейса %s занят: %v", addr, err)
@@ -224,10 +270,22 @@ func main() {
 			case <-showCh: // сбросить запросы, пришедшие пока окно было открыто
 			default:
 			}
-			if !a.Config().UI.KeepRunningOnClose {
+			if len(quitCh) > 0 {
 				return
 			}
-			log.Print("Окно закрыто — VoiceBox работает в фоне (Ctrl+Alt+V или повторный запуск — открыть)")
+			c := a.Config()
+			if !c.UI.KeepRunningOnClose {
+				return
+			}
+			log.Print("Окно закрыто — VoiceBox работает в фоне (значок в трее)")
+			if !c.UI.TrayHintShown {
+				hint := "Значок — в области уведомлений рядом с часами."
+				if k := keys.Display(a.HotkeyMap()["menu"]); k != "" {
+					hint += " Быстрое меню в игре: " + k
+				}
+				shell.Balloon("VoiceBox работает в фоне", hint)
+				a.UpdateConfig(func(c *config.Config) { c.UI.TrayHintShown = true })
+			}
 		}
 	}
 }
@@ -276,6 +334,6 @@ func pingExisting(addr string) bool {
 func fatal(f string, args ...any) {
 	msg := fmt.Sprintf(f, args...)
 	log.Print(msg)
-	winapi.Alert("Dota VoiceBox", msg)
+	winapi.Alert("VoiceBox", msg)
 	os.Exit(1)
 }

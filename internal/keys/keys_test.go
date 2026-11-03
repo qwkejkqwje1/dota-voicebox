@@ -14,3 +14,11 @@ func TestParse(t *testing.T) {
 		t.Fatal("expected error")
 	}
 }
+
+func TestDisplay(t *testing.T) {
+	for in, want := range map[string]string{"Alt+TILDE": "Alt+~", "ctrl+num1": "Ctrl+Num 1", "Ctrl+Alt+V": "Ctrl+Alt+V", "Pause": "Pause", "Mouse4": "Мышь 4", "": "", "F9": "F9", "Shift+NumAdd": "Shift+Num +"} {
+		if got := Display(in); got != want {
+			t.Errorf("%q: %q, want %q", in, got, want)
+		}
+	}
+}

@@ -1,0 +1,11 @@
+{
+  "name": "VoiceBox — пульт",
+  "short_name": "VoiceBox",
+  "start_url": ".",
+  "scope": ".",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#0b0b10",
+  "theme_color": "#0b0b10",
+  "icons": [{ "src": "icon.png", "sizes": "256x256", "type": "image/png", "purpose": "any" }]
+}

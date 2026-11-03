@@ -13,13 +13,13 @@ import (
 	"time"
 )
 
-// Bus — куда играть звук.
+// Bus — кто слышит звук.
 type Bus int
 
 const (
-	BusBoth    Bus = iota // команде (в войс) и вам в наушники
-	BusVoice              // только в войс
-	BusMonitor            // только вам (напоминания таймеров)
+	BusBoth    Bus = iota // команда (виртуальный кабель) и вы (наушники)
+	BusVoice              // только команда
+	BusMonitor            // только вы
 )
 
 func ParseBus(s string) Bus {
@@ -32,14 +32,38 @@ func ParseBus(s string) Bus {
 	return BusBoth
 }
 
+func (b Bus) String() string {
+	switch b {
+	case BusVoice:
+		return "voice"
+	case BusMonitor:
+		return "monitor"
+	}
+	return "both"
+}
+
+// Режимы повторного нажатия.
+const (
+	ModeToggle    = "toggle"    // повторное нажатие останавливает звук
+	ModeInterrupt = "interrupt" // повторное нажатие запускает звук сначала
+	ModeOverlap   = "overlap"   // звуки накладываются
+	ModeIgnore    = "ignore"    // пока играет — нажатия игнорируются
+)
+
 // Def — описание звука в config.json.
 type Def struct {
 	Files    []string `json:"files"`              // "sounds/x.mp3", "builtin:siren", "tts:Мид пропал"
 	Volume   float64  `json:"volume,omitempty"`   // 0..2, по умолчанию 1
 	Bus      string   `json:"bus,omitempty"`      // both | voice | monitor
 	Cooldown float64  `json:"cooldown,omitempty"` // сек, защита от спама
-	Mode     string   `json:"mode,omitempty"`     // overlap | interrupt | ignore
-	Label    string   `json:"label,omitempty"`    // подпись кнопки в интерфейсе
+	Mode     string   `json:"mode,omitempty"`     // toggle | interrupt | overlap | ignore
+	Label    string   `json:"label,omitempty"`    // название на плитке
+	Emoji    string   `json:"emoji,omitempty"`    // значок плитки
+	Color    string   `json:"color,omitempty"`    // цвет плитки (#rrggbb)
+	Category string   `json:"category,omitempty"` // группа на панели
+	Seq      bool     `json:"seq,omitempty"`      // играть все файлы подряд (иначе — случайный)
+	Dota     bool     `json:"dota,omitempty"`     // часть модуля Dota 2 (скрыт, когда модуль выключен)
+	Hidden   bool     `json:"hidden,omitempty"`   // служебный звук, не показывается на панели
 }
 
 type Sound struct {
@@ -52,7 +76,17 @@ type Sound struct {
 	Bus      Bus
 	Cooldown time.Duration
 	Mode     string
-	last     time.Time
+	Emoji    string
+	Color    string
+	Category string
+	Seq      bool
+	Dota     bool
+	Hidden   bool
+	Pending  bool   // часть фраз ещё синтезируется
+	Err      string // почему звук не загрузился (или загрузился не полностью)
+
+	mu   sync.Mutex
+	last time.Time
 }
 
 // Pick выбирает случайный клип, проверяя кулдаун.
@@ -60,6 +94,8 @@ func (s *Sound) Pick() (Clip, bool) {
 	if len(s.Clips) == 0 {
 		return nil, false
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.Cooldown > 0 && time.Since(s.last) < s.Cooldown {
 		return nil, false
 	}
@@ -67,12 +103,26 @@ func (s *Sound) Pick() (Clip, bool) {
 	return s.Clips[rand.Intn(len(s.Clips))], true
 }
 
-// TTSFunc синтезирует речь в WAV (реализация для Windows — через System.Speech).
-type TTSFunc func(text string) (Clip, error)
+// Duration — длительность самого длинного варианта, сек.
+func (s *Sound) Duration() float64 {
+	var d float64
+	for _, c := range s.Clips {
+		d = math.Max(d, float64(len(c))/SampleRate)
+	}
+	return d
+}
+
+// TTS — синтезатор речи. Библиотека берёт только готовые фразы из кэша;
+// недостающие попадают в Pending(), приложение синтезирует их в фоне
+// и перезагружает библиотеку. Так загрузка никогда не ждёт PowerShell.
+type TTS interface {
+	Cached(text string) (Clip, bool)
+}
 
 type Library struct {
-	mu     sync.Mutex
-	sounds map[string]*Sound
+	mu      sync.Mutex
+	sounds  map[string]*Sound
+	pending []string
 }
 
 func (l *Library) Get(id string) *Sound {
@@ -88,18 +138,32 @@ func (l *Library) IDs() []string {
 	for k := range l.sounds {
 		ids = append(ids, k)
 	}
+	sort.Strings(ids)
 	return ids
 }
 
-var audioExt = map[string]bool{".wav": true, ".mp3": true}
+// Pending — фразы, которых нет в кэше синтеза речи.
+func (l *Library) Pending() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return append([]string(nil), l.pending...)
+}
+
+// AudioExt — форматы, которые умеет читать библиотека.
+var AudioExt = map[string]bool{".wav": true, ".mp3": true}
+
+// SeqGap — пауза между частями звука-последовательности.
+const SeqGap = 0.12
 
 // Load собирает библиотеку: встроенные звуки, все файлы из папки sounds/
-// (id = имя файла без расширения) и явные описания из конфига (они главнее).
-func Load(baseDir, soundsDir string, defs map[string]Def, tts TTSFunc, normalize bool) *Library {
+// (id = имя файла без расширения) и описания из конфига (они главнее).
+func Load(baseDir, soundsDir string, defs map[string]Def, tts TTS, normalize bool) *Library {
 	lib := &Library{sounds: map[string]*Sound{}}
 	for _, name := range BuiltinNames() {
 		c, _ := Builtin(name)
-		lib.sounds[name] = &Sound{ID: name, Source: "builtin", Files: []string{"builtin:" + name}, Clips: []Clip{c}, Volume: 1}
+		m := builtinMeta[name]
+		lib.sounds[name] = &Sound{ID: name, Label: m.label, Emoji: m.emoji, Source: "builtin", Files: []string{"builtin:" + name},
+			Clips: []Clip{c}, Volume: 1, Mode: ModeInterrupt}
 	}
 	if soundsDir != "" {
 		dir := soundsDir
@@ -109,59 +173,104 @@ func Load(baseDir, soundsDir string, defs map[string]Def, tts TTSFunc, normalize
 		entries, _ := os.ReadDir(dir)
 		for _, e := range entries {
 			ext := strings.ToLower(filepath.Ext(e.Name()))
-			if e.IsDir() || !audioExt[ext] {
+			if e.IsDir() || !AudioExt[ext] {
 				continue
 			}
 			id := strings.TrimSuffix(e.Name(), filepath.Ext(e.Name()))
+			rel := filepath.ToSlash(filepath.Join(soundsDir, e.Name()))
+			s := &Sound{ID: id, Source: "file", Files: []string{rel}, Volume: 1, Mode: ModeToggle}
 			c, err := decodeCached(filepath.Join(dir, e.Name()), normalize)
 			if err != nil {
 				log.Printf("звук %s: %v", e.Name(), err)
-				continue
+				s.Err = err.Error()
+			} else {
+				s.Clips = []Clip{c}
 			}
-			rel := filepath.ToSlash(filepath.Join(soundsDir, e.Name()))
-			lib.sounds[id] = &Sound{ID: id, Source: "file", Files: []string{rel}, Clips: []Clip{c}, Volume: 1}
+			lib.sounds[id] = s
 		}
 	}
+	pend := map[string]bool{}
 	for id, d := range defs {
 		s := &Sound{ID: id, Label: d.Label, Source: "config", Files: d.Files, Volume: 1, Bus: ParseBus(d.Bus), Mode: d.Mode,
-			Cooldown: time.Duration(d.Cooldown * float64(time.Second))}
+			Cooldown: time.Duration(d.Cooldown * float64(time.Second)), Emoji: d.Emoji, Color: d.Color, Category: d.Category,
+			Seq: d.Seq, Dota: d.Dota, Hidden: d.Hidden}
 		if d.Volume > 0 {
 			s.Volume = float32(d.Volume)
 		}
+		var errs []string
 		for _, f := range d.Files {
-			c, err := resolve(baseDir, f, tts, normalize)
+			if text, ok := strings.CutPrefix(f, "tts:"); ok && tts != nil {
+				c, ok := tts.Cached(text)
+				if !ok {
+					if f, ok := tts.(interface{ Failed(string) error }); ok {
+						if err := f.Failed(text); err != nil {
+							errs = append(errs, "синтез речи: "+err.Error())
+							continue
+						}
+					}
+					s.Pending = true
+					if !pend[text] {
+						pend[text] = true
+						lib.pending = append(lib.pending, text)
+					}
+					continue
+				}
+				if normalize {
+					c = Normalize(c)
+				}
+				s.Clips = append(s.Clips, c)
+				continue
+			}
+			c, err := resolve(baseDir, f, normalize)
 			if err != nil {
 				log.Printf("звук %s (%s): %v", id, f, err)
+				errs = append(errs, err.Error())
 				continue
 			}
 			s.Clips = append(s.Clips, c)
 		}
-		if len(s.Clips) == 0 {
-			log.Printf("звук %s: нет ни одного рабочего файла", id)
-			continue
+		if s.Seq && len(s.Clips) > 1 {
+			s.Clips = []Clip{Concat(s.Clips, SeqGap)}
+		}
+		if len(errs) > 0 {
+			s.Err = strings.Join(errs, "; ")
+		}
+		if len(s.Clips) == 0 && !s.Pending && s.Err == "" {
+			s.Err = "нет ни одного файла"
 		}
 		lib.sounds[id] = s
 	}
+	sort.Strings(lib.pending)
 	return lib
 }
 
-func resolve(baseDir, src string, tts TTSFunc, normalize bool) (Clip, error) {
+// Concat склеивает клипы с паузой gap секунд между ними.
+func Concat(clips []Clip, gap float64) Clip {
+	g := int(gap * SampleRate)
+	n := 0
+	for _, c := range clips {
+		n += len(c) + g
+	}
+	out := make(Clip, 0, n)
+	for i, c := range clips {
+		if i > 0 {
+			out = append(out, make(Clip, g)...)
+		}
+		out = append(out, c...)
+	}
+	return out
+}
+
+func resolve(baseDir, src string, normalize bool) (Clip, error) {
 	switch {
 	case strings.HasPrefix(src, "builtin:"):
 		name := strings.TrimPrefix(src, "builtin:")
 		if c, ok := Builtin(name); ok {
 			return c, nil
 		}
-		return nil, fmt.Errorf("нет встроенного звука %q (есть: %s)", name, strings.Join(BuiltinNames(), ", "))
+		return nil, fmt.Errorf("нет встроенного звука %q", name)
 	case strings.HasPrefix(src, "tts:"):
-		if tts == nil {
-			return nil, fmt.Errorf("TTS недоступен на этой системе")
-		}
-		c, err := tts(strings.TrimPrefix(src, "tts:"))
-		if err == nil && normalize {
-			c = Normalize(c)
-		}
-		return c, err
+		return nil, fmt.Errorf("синтез речи недоступен на этой системе")
 	}
 	p := src
 	if !filepath.IsAbs(p) {
@@ -191,6 +300,9 @@ var (
 func decodeCached(path string, normalize bool) (Clip, error) {
 	st, err := os.Stat(path)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, fmt.Errorf("файл не найден: %s", filepath.Base(path))
+		}
 		return nil, err
 	}
 	k := cacheKey{path, st.Size(), st.ModTime().UnixNano(), normalize}
@@ -263,6 +375,21 @@ type Info struct {
 	Bus      string   `json:"bus"`
 	Cooldown float64  `json:"cooldown"`
 	Mode     string   `json:"mode"`
+	Emoji    string   `json:"emoji,omitempty"`
+	Color    string   `json:"color,omitempty"`
+	Category string   `json:"category,omitempty"`
+	Seq      bool     `json:"seq,omitempty"`
+	Dota     bool     `json:"dota,omitempty"`
+	Hidden   bool     `json:"hidden,omitempty"`
+	Pending  bool     `json:"pending,omitempty"`
+	Error    string   `json:"error,omitempty"`
+}
+
+func (s *Sound) Info() Info {
+	return Info{ID: s.ID, Label: s.Label, Source: s.Source, Files: s.Files, Duration: math.Round(s.Duration()*10) / 10,
+		Volume: s.Volume, Bus: s.Bus.String(), Cooldown: s.Cooldown.Seconds(), Mode: s.Mode,
+		Emoji: s.Emoji, Color: s.Color, Category: s.Category, Seq: s.Seq, Dota: s.Dota, Hidden: s.Hidden,
+		Pending: s.Pending, Error: s.Err}
 }
 
 func (l *Library) Infos() []Info {
@@ -270,12 +397,7 @@ func (l *Library) Infos() []Info {
 	defer l.mu.Unlock()
 	out := make([]Info, 0, len(l.sounds))
 	for _, s := range l.sounds {
-		var d float64
-		for _, c := range s.Clips {
-			d = math.Max(d, float64(len(c))/SampleRate)
-		}
-		out = append(out, Info{ID: s.ID, Label: s.Label, Source: s.Source, Files: s.Files, Duration: math.Round(d*10) / 10,
-			Volume: s.Volume, Bus: [...]string{"both", "voice", "monitor"}[s.Bus], Cooldown: s.Cooldown.Seconds(), Mode: s.Mode})
+		out = append(out, s.Info())
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out

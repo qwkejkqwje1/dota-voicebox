@@ -12,6 +12,7 @@ import (
 	"github.com/gen2brain/malgo"
 
 	"github.com/qwkejkqwje1/dota-voicebox/internal/dsp"
+	"github.com/qwkejkqwje1/dota-voicebox/internal/rnnoise"
 	"github.com/qwkejkqwje1/dota-voicebox/internal/sounds"
 )
 
@@ -88,9 +89,28 @@ type Engine struct {
 	vizPre   tap // микрофон до эффектов
 	vizPost  tap // эфир после эффектов
 
+	// смена эффекта: старая цепочка затухает, новая нарастает (без щелчков)
+	fx xchain
+
+	// улучшение голоса до эффекта: шумоподавление и тембр; фон под голос — после эффекта
+	dn      atomic.Pointer[rnnoise.Stream]
+	dnOn    atomic.Bool
+	dnStr   afloat
+	timbre  atomic.Pointer[dsp.Chain]
+	tx      xchain
+	bg      atomic.Pointer[bgBox]
+	bgVol   afloat
+	bgTalk  atomic.Bool
+	bgState bgMix
+
+	demo demoVoice // голос-заглушка в демо-режиме
+
 	// буферы аудиопотока (без аллокаций в колбэке после прогрева)
 	work, sfx, mono2 []float32
 }
+
+// длительность перехода между эффектами
+const xfLen = sounds.SampleRate * 40 / 1000
 
 func NewEngine() *Engine {
 	e := &Engine{micMonBuf: newRing(sounds.SampleRate / 2), gateGain: 1, talkGain: 1}
@@ -151,6 +171,9 @@ type Device struct {
 
 // Devices возвращает микрофоны и устройства вывода.
 func Devices() (capture, playback []Device, err error) {
+	if Demo {
+		return demoDevices()
+	}
 	ctx, err := malgo.InitContext(nil, malgo.ContextConfig{}, nil)
 	if err != nil {
 		return nil, nil, err
@@ -281,6 +304,9 @@ func (e *Engine) Start(opt Options) error {
 
 func (e *Engine) startLocked() error {
 	e.status = Status{}
+	if Demo {
+		return e.startDemoLocked()
+	}
 	ctx, err := malgo.InitContext(nil, malgo.ContextConfig{}, nil)
 	if err != nil {
 		return err
@@ -360,7 +386,11 @@ func (e *Engine) onDuplex(out, in []byte, frames uint32) {
 	o := f32(out)
 	e.work = grow(e.work, n)
 	e.sfx = grow(e.sfx, n)
-	if mic := f32(in); len(mic) >= n {
+	mic := f32(in)
+	if Demo && len(mic) >= n {
+		e.demo.fill(mic[:n])
+	}
+	if len(mic) >= n {
 		if r := e.rawRec.Load(); r != nil {
 			r.write(mic[:n])
 		}
@@ -372,26 +402,30 @@ func (e *Engine) onDuplex(out, in []byte, frames uint32) {
 			e.work[i] = mic[i] * g
 		}
 		peak(e.work, &e.lvMic)
+		if dn := e.dn.Load(); dn != nil {
+			dn.Process(e.work[:n], e.dnOn.Load(), e.dnStr.Load())
+		}
 		e.gate(e.work)
 		e.vizPre.write(e.work)
 		e.talk(e.work)
+		e.tx.process(e.timbre.Load(), e.work[:n], true, false)
 	}
-	chain := e.chain.Load()
 	playing := e.VoiceMix.Render(e.sfx)
 	sv, d := e.sfxVol.Load(), e.ducking.Load()
 	if playing && e.fxOnSfx.Load() {
 		for i := 0; i < n; i++ {
 			e.work[i] = e.work[i]*d + e.sfx[i]*sv
 		}
-		chain.Process(e.work)
+		e.processChain(e.work)
 	} else {
-		chain.Process(e.work)
+		e.processChain(e.work)
 		if playing {
 			for i := 0; i < n; i++ {
 				e.work[i] = e.work[i]*d + e.sfx[i]*sv
 			}
 		}
 	}
+	e.mixBackground(e.work[:n])
 	e.mixSources(e.work, e.micEnv)
 	softClip(e.work)
 	e.vizPost.write(e.work)
@@ -402,6 +436,54 @@ func (e *Engine) onDuplex(out, in []byte, frames uint32) {
 	}
 	for i := 0; i < n && 2*i+1 < len(o); i++ {
 		o[2*i], o[2*i+1] = e.work[i], e.work[i]
+	}
+}
+
+// processChain пропускает голос через текущий эффект. При смене эффекта
+// 40 мс звучат оба (старый затухает) — переключение без щелчков и обрывов.
+func (e *Engine) processChain(b []float32) {
+	e.fx.process(e.chain.Load(), b, e.talkOpen.Load(), e.talkGate.Load())
+}
+
+// dry — «пустая» цепочка: из неё плавно входит первая обработка.
+var dry = &dsp.Chain{Name: "dry"}
+
+// xchain — цепочка эффектов с плавной сменой: старая ещё 40 мс звучит и затухает.
+type xchain struct {
+	cur, old *dsp.Chain
+	pos      int
+	tmp      []float32
+}
+
+func (x *xchain) process(chain *dsp.Chain, b []float32, open, known bool) {
+	if chain != x.cur {
+		x.old, x.pos = x.cur, 0
+		if x.old == nil {
+			x.old = dry
+		}
+		x.cur = chain
+	}
+	chain.SetKey(open, known)
+	old := x.old
+	if old == nil {
+		chain.Process(b)
+		return
+	}
+	x.tmp = growNoClear(x.tmp, len(b))
+	copy(x.tmp, b)
+	old.SetKey(open, known)
+	old.Process(x.tmp)
+	chain.Process(b)
+	for i := range b {
+		g := float32(x.pos+i) / xfLen
+		if g > 1 {
+			g = 1
+		}
+		b[i] = b[i]*g + x.tmp[i]*(1-g)
+	}
+	x.pos += len(b)
+	if x.pos >= xfLen {
+		x.old = nil
 	}
 }
 
@@ -454,6 +536,6 @@ func (e *Engine) closeLocked() {
 		e.ctx.Free()
 		e.ctx = nil
 	}
-	e.VoiceMix.Stop("")
-	e.MonitorMix.Stop("")
+	e.VoiceMix.Clear()
+	e.MonitorMix.Clear()
 }

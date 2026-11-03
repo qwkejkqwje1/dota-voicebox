@@ -8,27 +8,15 @@
 <link rel="icon" href="icon.png">
 </head>
 <body>
-<aside id="nav">
-  <div class="brand"><img src="icon.png" width="22" style="vertical-align:-5px"> <b>VoiceBox</b><small id="ver"></small></div>
-  <button data-page="home" class="active">🎛 Пульт</button>
-  <button data-page="board">🔊 Саундборд</button>
-  <button data-page="sounds">📁 Звуки</button>
-  <button data-page="voice">🎙 Голос</button>
-  <button data-page="integrations">🎮 Интеграции</button>
-  <button data-page="keys">⌨️ Управление</button>
-  <button data-page="scripts">⚡ Скрипты</button>
-  <button data-page="test">🩺 Тест</button>
-  <button data-page="setup">⚙️ Настройка <span id="setupBadge" class="badge hidden">!</span></button>
-  <button data-page="log">📜 Журнал</button>
-  <div class="grow"></div>
-  <button id="quitBtn" class="ghost">⏻ Выход</button>
-</aside>
-<main>
-  <header id="pills"></header>
-  <section id="page"></section>
-</main>
-<div id="toast"></div>
-<div id="modal" class="hidden"><div class="modal-box"><div id="modalBody"></div></div></div>
-<script src="app.js"></script>
+<div id="app">
+  <nav id="nav"></nav>
+  <div id="main">
+    <header id="top"><h1 id="title"></h1><div id="topbar"></div></header>
+    <section id="page"></section>
+  </div>
+</div>
+<div id="toasts"></div>
+<div id="layer"></div>
+<script type="module" src="js/main.js"></script>
 </body>
 </html>

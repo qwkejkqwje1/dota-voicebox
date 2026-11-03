@@ -38,6 +38,42 @@ type Spec struct {
 	LenMS     float64 `json:"len_ms,omitempty"`
 	Mix       float64 `json:"mix,omitempty"`
 	Kind      string  `json:"kind,omitempty"`
+
+	// v1.0: время, высота тона, пространство
+	Semitones  float64 `json:"semitones,omitempty"`
+	WindowMS   float64 `json:"window_ms,omitempty"`
+	Room       float64 `json:"room,omitempty"` // 0..1 размер помещения (reverb)
+	Damp       float64 `json:"damp,omitempty"` // 0..1 глушение высоких (reverb)
+	Wet        float64 `json:"wet,omitempty"`  // 0..1 уровень эффекта
+	Dry        float64 `json:"dry,omitempty"`  // 0..1 уровень исходного (0 = по умолчанию 1)
+	PreDelayMS float64 `json:"predelay_ms,omitempty"`
+	DelayMS    float64 `json:"delay_ms,omitempty"`
+	Feedback   float64 `json:"feedback,omitempty"`
+	RateHz     float64 `json:"rate_hz,omitempty"`
+	Depth      float64 `json:"depth,omitempty"` // мс для chorus/vibrato/flanger, 0..1 для tremolo
+	Hold       int     `json:"hold,omitempty"`  // mulaw: удержание отсчёта (8 кГц = 6)
+
+	// v1.0: рация (type "radio")
+	LowHz        float64 `json:"low_hz,omitempty"`
+	HighHz       float64 `json:"high_hz,omitempty"`
+	Drive        float64 `json:"drive,omitempty"`        // 0..1
+	NoiseDB      float64 `json:"noise_db,omitempty"`     // шум эфира, дБ (0 = выкл)
+	Interference float64 `json:"interference,omitempty"` // 0..1 помехи: треск, выпадения, замирания
+	Digital      float64 `json:"digital,omitempty"`      // 0..1 цифровая грязь
+	Beep         string  `json:"beep,omitempty"`         // сигнал в конце: beep | double | chirp | quindar
+	TPT          bool    `json:"tpt,omitempty"`          // короткий сигнал в начале передачи
+	NoSquelch    bool    `json:"no_squelch,omitempty"`   // без щелчка в начале и шума в конце
+
+	// v1.3: автотюн (type "autotune"; ещё semitones — сдвиг, mix)
+	Key   int     `json:"key,omitempty"`   // тональность: 0 — до (C) … 11 — си (B)
+	Scale string  `json:"scale,omitempty"` // chromatic (все ноты) | major | minor
+	Speed float64 `json:"speed,omitempty"` // 0 — мгновенная подстройка («робот») … 1 — плавная
+}
+
+// Keyable — эффект, которому важно, «нажата ли тангента» (режим «говорю по кнопке»).
+// known=false — режима по кнопке нет, эффект сам определяет речь по уровню.
+type Keyable interface {
+	SetKey(open, known bool)
 }
 
 func dbToLin(db float64) float64 { return math.Pow(10, db/20) }
@@ -89,7 +125,37 @@ func Build(s Spec, sr float64) (Effect, error) {
 	case "ringmod":
 		return &RingMod{Freq: or(s.Freq, 50), Mix: or(s.Mix, 0.7), sr: sr}, nil
 	case "limiter":
-		return NewCompressor(or(s.Threshold, -1), 50, 0.5, 60, 0, sr), nil
+		thr := or(s.Threshold, -1)
+		return &Limiter{c: NewCompressor(thr, 50, 0.5, 60, 0, sr), ceil: float32(dbToLin(thr))}, nil
+	case "radio":
+		return NewRadio(s, sr), nil
+	case "pitch":
+		if s.Semitones == 0 {
+			return &Gain{G: 1}, nil
+		}
+		return NewPitchShift(s.Semitones, or(s.WindowMS, 45), or(s.Mix, 1), sr), nil
+	case "reverb":
+		return NewReverb(or(s.Room, 0.6), s.Damp, or(s.Wet, 0.3), or(s.Dry, 1), s.PreDelayMS, sr), nil
+	case "echo":
+		return NewEcho(or(s.DelayMS, 250), s.Feedback, or(s.Mix, 0.35), or(s.Freq, 3500), sr), nil
+	case "chorus":
+		return NewModDelay(15, or(s.Depth, 4), or(s.RateHz, 0.8), s.Feedback, or(s.Mix, 0.5), 1, sr), nil
+	case "flanger":
+		return NewModDelay(1, or(s.Depth, 2.5), or(s.RateHz, 0.25), or(s.Feedback, 0.6), or(s.Mix, 0.6), 1, sr), nil
+	case "vibrato":
+		return NewModDelay(1.5, or(s.Depth, 2), or(s.RateHz, 5.5), 0, 1, -1, sr), nil
+	case "tremolo":
+		return &Tremolo{Depth: or(s.Depth, 0.5), inc: 2 * math.Pi * or(s.RateHz, 6) / sr}, nil
+	case "mulaw":
+		h := s.Hold
+		if h < 1 {
+			h = 6
+		}
+		return &MuLaw{Hold: h}, nil
+	case "comb":
+		return NewComb(or(s.Freq, 120), or(s.Feedback, 0.6), or(s.Mix, 0.5), sr), nil
+	case "autotune":
+		return NewAutoTune(s.Key, s.Scale, s.Speed, s.Semitones, or(s.Mix, 1), sr), nil
 	}
 	return nil, fmt.Errorf("неизвестный эффект %q", s.Type)
 }
@@ -267,6 +333,23 @@ func NewBiquad(kind string, f, q, gainDB, sr float64) *Biquad {
 	return &Biquad{b0: b0 / a0, b1: b1 / a0, b2: b2 / a0, a1: a1 / a0, a2: a2 / a0}
 }
 
+// Tick — один отсчёт (для синтеза звуков).
+func (f *Biquad) Tick(x float64) float64 { return f.tick(x) }
+
+// CopyState переносит состояние фильтра (плавная смена частоты без щелчков).
+func (f *Biquad) CopyState(o *Biquad) { f.x1, f.x2, f.y1, f.y2 = o.x1, o.x2, o.y1, o.y2 }
+
+// tick — один отсчёт (для составных эффектов).
+func (f *Biquad) tick(x float64) float64 {
+	y := f.b0*x + f.b1*f.x1 + f.b2*f.x2 - f.a1*f.y1 - f.a2*f.y2
+	if y > -1e-20 && y < 1e-20 {
+		y = 0
+	}
+	f.x2, f.x1 = f.x1, x
+	f.y2, f.y1 = f.y1, y
+	return y
+}
+
 func (f *Biquad) Process(b []float32) {
 	for i, xf := range b {
 		x := float64(xf)
@@ -293,6 +376,21 @@ func NewCompressor(thrDB, ratio, attMS, relMS, makeupDB, sr float64) *Compressor
 	}
 }
 
+// tick — один отсчёт.
+func (c *Compressor) tick(xf float64) float64 {
+	x := math.Abs(xf)
+	if x > c.env {
+		c.env = c.att*c.env + (1-c.att)*x
+	} else {
+		c.env = c.rel*c.env + (1-c.rel)*x
+	}
+	g := 1.0
+	if lv := 20 * math.Log10(c.env+1e-9); lv > c.thr {
+		g = dbToLin((c.thr + (lv-c.thr)/c.ratio) - lv)
+	}
+	return xf * g * c.makeup
+}
+
 func (c *Compressor) Process(b []float32) {
 	for i, xf := range b {
 		x := math.Abs(float64(xf))
@@ -306,6 +404,27 @@ func (c *Compressor) Process(b []float32) {
 			g = dbToLin((c.thr + (lv-c.thr)/c.ratio) - lv)
 		}
 		b[i] = float32(float64(xf) * g * c.makeup)
+	}
+}
+
+// Limiter — быстрый компрессор плюс мягкий «потолок»: пики никогда не выходят за порог.
+type Limiter struct {
+	c    *Compressor
+	ceil float32
+}
+
+func (l *Limiter) Process(b []float32) {
+	l.c.Process(b)
+	knee := 0.8 * l.ceil
+	span := l.ceil - knee
+	for i, x := range b {
+		a, s := x, float32(1)
+		if a < 0 {
+			a, s = -a, -1
+		}
+		if a > knee {
+			b[i] = s * (knee + span*float32(math.Tanh(float64((a-knee)/span))))
+		}
 	}
 }
 
@@ -420,6 +539,18 @@ func (q *Squelch) Process(b []float32) {
 type Chain struct {
 	Name    string
 	Effects []Effect
+}
+
+// SetKey передаёт состояние тангенты эффектам, которые его используют (рация).
+func (c *Chain) SetKey(open, known bool) {
+	if c == nil {
+		return
+	}
+	for _, e := range c.Effects {
+		if k, ok := e.(Keyable); ok {
+			k.SetKey(open, known)
+		}
+	}
 }
 
 func (c *Chain) Process(b []float32) {

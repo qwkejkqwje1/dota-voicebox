@@ -4,6 +4,7 @@ package winapi
 
 import (
 	"runtime"
+	"sync/atomic"
 	"syscall"
 	"time"
 	"unsafe"
@@ -35,8 +36,25 @@ type msLL struct {
 	extra                  uintptr
 }
 
+type hookFilters struct {
+	key   func(vk, scan uint32, down bool) bool
+	mouse func(msg uintptr, x, y int32, data uint32) bool
+}
+
+var hookFilter atomic.Pointer[hookFilters]
+
+// SetHookFilter — обработчики, которые могут «съесть» нажатие (быстрое меню поверх игры).
+// Вызываются в потоке перехватчика — должны отвечать мгновенно.
+func SetHookFilter(key func(vk, scan uint32, down bool) bool, mouse func(msg uintptr, x, y int32, data uint32) bool) {
+	if key == nil && mouse == nil {
+		hookFilter.Store(nil)
+		return
+	}
+	hookFilter.Store(&hookFilters{key: key, mouse: mouse})
+}
+
 // StartKeyHook запускает глобальный перехват клавиатуры и боковых кнопок мыши.
-// Нажатия НЕ блокируются (игра их тоже получает). Эмулированные программой
+// Нажатия не блокируются (игра их тоже получает), кроме клавиш открытого быстрого меню. Эмулированные программой
 // нажатия (наш PTT) игнорируются. Обработчик вызывается в отдельной горутине.
 func StartKeyHook(out chan<- combo.Event) error {
 	errc := make(chan error, 1)
@@ -51,6 +69,11 @@ func StartKeyHook(out chan<- combo.Event) error {
 		kb := syscall.NewCallback(func(code int, wparam uintptr, k *kbdLL) uintptr {
 			if code >= 0 && k != nil {
 				if k.flags&llkhfInjected == 0 {
+					down := wparam == 0x0100 || wparam == 0x0104
+					up := wparam == 0x0101 || wparam == 0x0105
+					if f := hookFilter.Load(); f != nil && f.key != nil && (down || up) && f.key(k.vk, k.scan, down) {
+						return 1
+					}
 					switch wparam {
 					case 0x0100, 0x0104: // WM_KEYDOWN, WM_SYSKEYDOWN
 						send(k.vk, true)
@@ -65,6 +88,9 @@ func StartKeyHook(out chan<- combo.Event) error {
 		ms := syscall.NewCallback(func(code int, wparam uintptr, m *msLL) uintptr {
 			if code >= 0 && m != nil {
 				if m.flags&llmhfInjected == 0 {
+					if f := hookFilter.Load(); f != nil && f.mouse != nil && wparam != 0x0200 && f.mouse(wparam, m.x, m.y, m.mouseData) {
+						return 1
+					}
 					btn := uint32(0)
 					switch m.mouseData >> 16 {
 					case 1:

@@ -13,8 +13,7 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"path/filepath"
-	"regexp"
+	"path"
 	"strings"
 	"time"
 
@@ -24,6 +23,7 @@ import (
 	"github.com/qwkejkqwje1/dota-voicebox/internal/dsp"
 	"github.com/qwkejkqwje1/dota-voicebox/internal/gsi"
 	"github.com/qwkejkqwje1/dota-voicebox/internal/logbus"
+	"github.com/qwkejkqwje1/dota-voicebox/internal/overlay"
 	"github.com/qwkejkqwje1/dota-voicebox/internal/script"
 	"github.com/qwkejkqwje1/dota-voicebox/internal/sounds"
 	"github.com/qwkejkqwje1/dota-voicebox/internal/update"
@@ -44,6 +44,17 @@ type Server struct {
 
 	Updater     *update.Updater
 	RestartArgs []string
+
+	Emoji          *overlay.FileEmoji // картинки эмодзи для меню поверх игры
+	OnMenuPreview  func()             // показать быстрое меню (проверка из настроек)
+	OnWheelPreview func()             // показать колесо звуков
+	Remote         *Remote            // пульт с телефона
+	Exe            string             // путь к программе (правило брандмауэра для пульта)
+}
+
+var staticTypes = map[string]string{
+	".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8",
+	".png": "image/png", ".svg": "image/svg+xml", ".json": "application/json",
 }
 
 func NewToken() string {
@@ -61,7 +72,18 @@ func (s *Server) Listen() (net.Listener, error) { return net.Listen("tcp", s.Add
 func (s *Server) Serve(l net.Listener) error {
 	mux := http.NewServeMux()
 	sub, _ := fs.Sub(static, "static")
-	mux.Handle("/", http.FileServer(http.FS(sub)))
+	if dir := os.Getenv("VOICEBOX_UI_DIR"); dir != "" { // разработка интерфейса: файлы с диска без пересборки
+		sub = os.DirFS(dir)
+	}
+	files := http.FileServer(http.FS(sub))
+	mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// типы явно: в Windows реестр может подменить MIME, а модули JS без верного типа не грузятся
+		if t := staticTypes[strings.ToLower(path.Ext(r.URL.Path))]; t != "" {
+			w.Header().Set("Content-Type", t)
+		}
+		w.Header().Set("Cache-Control", "no-cache") // после обновления окно сразу берёт новые файлы
+		files.ServeHTTP(w, r)
+	}))
 	mux.HandleFunc("/api/ping", func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "voicebox") })
 	mux.HandleFunc("/api/show", func(w http.ResponseWriter, r *http.Request) {
 		if s.OnShow != nil {
@@ -72,8 +94,6 @@ func (s *Server) Serve(l net.Listener) error {
 		"GET /api/state":            s.state,
 		"POST /api/action":          s.action,
 		"PUT /api/config":           s.putConfig,
-		"POST /api/sounds":          s.upload,
-		"POST /api/sounds/delete":   s.deleteSound,
 		"GET /api/setup":            func(*http.Request) (any, error) { return s.App.SetupStatus(), nil },
 		"POST /api/setup/auto":      s.autoSetup,
 		"POST /api/setup/fix":       s.fix,
@@ -104,6 +124,9 @@ func (s *Server) Serve(l net.Listener) error {
 			l, err := winapi.CaptureSessions()
 			return map[string]any{"sessions": l}, err
 		},
+	}
+	for k, v := range s.api2() {
+		api[k] = v
 	}
 	for pattern, h := range api {
 		h := h
@@ -136,53 +159,6 @@ func decode(r *http.Request, v any) error {
 }
 
 // ---------- состояние ----------
-
-type presetInfo struct {
-	Name    string     `json:"name"`
-	Builtin bool       `json:"builtin"`
-	Desc    string     `json:"desc"`
-	Specs   []dsp.Spec `json:"specs"`
-}
-
-var presetDesc = map[string]string{
-	"clean":           "Чистый голос",
-	"dead_inside":     "Передавленный микрофон, перегруз и раздутый бас",
-	"dead_inside_max": "Ушная боль: жёсткий клиппинг, 6 бит",
-	"radio":           "Рация: узкая полоса, щелчок, шипение, хвост",
-	"radio_broken":    "Рация с плохим приёмом: треск и выпадения",
-	"megaphone":       "Громкоговоритель",
-	"robot":           "Робот",
-}
-
-func (s *Server) state(*http.Request) (any, error) {
-	cfg := s.App.Config()
-	var presets []presetInfo
-	for _, n := range s.App.PresetNames() {
-		specs, builtin := dsp.BuiltinPresets[n]
-		if c, ok := cfg.VoicePresets[n]; ok {
-			specs, builtin = c, false
-		}
-		presets = append(presets, presetInfo{Name: n, Builtin: builtin, Desc: presetDesc[n], Specs: specs})
-	}
-	capture, playback, derr := audio.Devices()
-	cable, cableRec := s.App.CableNames(capture, playback)
-	errStr := ""
-	if derr != nil {
-		errStr = derr.Error()
-	}
-	return map[string]any{
-		"version":    s.App.Version,
-		"config":     cfg,
-		"sounds":     s.App.Sounds(),
-		"builtins":   sounds.BuiltinNames(),
-		"presets":    presets,
-		"devices":    map[string]any{"capture": capture, "playback": playback, "error": errStr, "cable": cable, "cable_rec": cableRec},
-		"events":     gsiEvents,
-		"logs":       s.Logs.Lines(),
-		"status":     s.App.Status(),
-		"sounds_dir": s.App.SoundsDir(),
-	}, nil
-}
 
 var gsiEvents = []map[string]string{
 	{"id": gsi.EvGameStart, "label": "Горн (0:00)"}, {"id": gsi.EvPreGame, "label": "Начало пре-гейма"},
@@ -225,7 +201,8 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 			fl.Flush()
 		case <-tick.C:
 			lv := s.Engine.Levels()
-			send("levels", map[string]any{"mic_in": lv.MicIn, "voice_out": lv.VoiceOut, "monitor": lv.Monitor, "strips": s.Engine.StripLevels()})
+			send("levels", map[string]any{"mic_in": lv.MicIn, "voice_out": lv.VoiceOut, "monitor": lv.Monitor, "strips": s.Engine.StripLevels(),
+				"playing": s.App.Playing()})
 			if n%5 == 0 { // статус — 2 раза в секунду
 				send("status", s.App.Status())
 			}
@@ -256,99 +233,6 @@ func (s *Server) putConfig(r *http.Request) (any, error) {
 	if err := s.App.SaveConfig(&c); err != nil {
 		return nil, err
 	}
-	return s.state(r)
-}
-
-var safeName = regexp.MustCompile(`[^\p{L}\p{N}_\-\. ]+`)
-
-func (s *Server) upload(r *http.Request) (any, error) {
-	if err := r.ParseMultipartForm(64 << 20); err != nil {
-		return nil, err
-	}
-	dir := s.App.SoundsDir()
-	os.MkdirAll(dir, 0o755)
-	var saved []string
-	for _, fh := range r.MultipartForm.File["files"] {
-		ext := strings.ToLower(filepath.Ext(fh.Filename))
-		if ext != ".mp3" && ext != ".wav" {
-			return nil, fmt.Errorf("%s: поддерживаются только .mp3 и .wav", fh.Filename)
-		}
-		name := strings.TrimSpace(safeName.ReplaceAllString(strings.TrimSuffix(filepath.Base(fh.Filename), filepath.Ext(fh.Filename)), "_"))
-		name = strings.Trim(strings.ReplaceAll(name, " ", "_"), "_.")
-		if name == "" {
-			name = "sound"
-		}
-		f, err := fh.Open()
-		if err != nil {
-			return nil, err
-		}
-		data, err := io.ReadAll(f)
-		f.Close()
-		if err != nil {
-			return nil, err
-		}
-		// проверяем, что файл декодируется, до сохранения
-		tmp := filepath.Join(dir, ".upload"+ext)
-		os.WriteFile(tmp, data, 0o644)
-		_, derr := sounds.DecodeFile(tmp)
-		os.Remove(tmp)
-		if derr != nil {
-			return nil, fmt.Errorf("%s: не удалось прочитать аудио: %v", fh.Filename, derr)
-		}
-		if err := os.WriteFile(filepath.Join(dir, name+ext), data, 0o644); err != nil {
-			return nil, err
-		}
-		saved = append(saved, name)
-		log.Printf("Добавлен звук: %s", name)
-	}
-	if err := s.App.Reload(); err != nil {
-		return nil, err
-	}
-	st, _ := s.state(r)
-	return map[string]any{"saved": saved, "state": st}, nil
-}
-
-func (s *Server) deleteSound(r *http.Request) (any, error) {
-	var req struct {
-		ID string `json:"id"`
-	}
-	if err := decode(r, &req); err != nil {
-		return nil, err
-	}
-	found := false
-	for _, inf := range s.App.Sounds() {
-		if inf.ID != req.ID {
-			continue
-		}
-		found = true
-		if inf.Source == "builtin" {
-			return nil, fmt.Errorf("встроенный звук удалить нельзя")
-		}
-		if inf.Source == "file" {
-			for _, f := range inf.Files {
-				p := f
-				if !filepath.IsAbs(p) {
-					p = filepath.Join(s.App.BaseDir, p)
-				}
-				os.Remove(p)
-			}
-		}
-	}
-	if !found {
-		return nil, fmt.Errorf("звук %q не найден", req.ID)
-	}
-	err := s.App.UpdateConfig(func(c *config.Config) {
-		delete(c.Sounds, req.ID)
-		for k, v := range c.Hotkeys {
-			if v == "sound:"+req.ID || strings.HasPrefix(v, "sound:"+req.ID+"@") {
-				delete(c.Hotkeys, k)
-			}
-		}
-	})
-	if err != nil {
-		return nil, err
-	}
-	log.Printf("Звук удалён: %s", req.ID)
 	return s.state(r)
 }
 

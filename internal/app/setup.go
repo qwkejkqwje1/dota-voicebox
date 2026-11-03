@@ -76,77 +76,79 @@ func (a *App) SetupStatus() SetupStatus {
 	}
 	add(ch)
 
-	add(Check{ID: "dota_input", Title: "Микрофон в Dota 2", OK: as.Running,
-		Detail: fmt.Sprintf("В Dota 2 → Настройки → Звук → Устройство ввода выберите «%s»", recOr(rec)),
-		Manual: "Игра не даёт выбрать устройство программно — это единственный ручной шаг (один раз)."})
+	if c.Dota.Enabled { // модуль Dota 2 выключен — его проверки не нужны и автонастройка их не трогает
+		add(Check{ID: "dota_input", Title: "Микрофон в Dota 2", OK: as.Running,
+			Detail: fmt.Sprintf("В Dota 2 → Настройки → Звук → Устройство ввода выберите «%s»", recOr(rec)),
+			Manual: "Игра не даёт выбрать устройство программно — это единственный ручной шаг (один раз)."})
 
-	root := winapi.SteamRoot()
-	dota, derr2 := winapi.FindDota(root)
-	ch = Check{ID: "dota", Title: "Dota 2", OK: derr2 == nil, Detail: dota}
-	if derr2 != nil {
-		ch.Detail = derr2.Error()
-	}
-	add(ch)
+		root := winapi.SteamRoot()
+		dota, derr2 := winapi.FindDota(root)
+		ch = Check{ID: "dota", Title: "Dota 2", OK: derr2 == nil, Detail: dota}
+		if derr2 != nil {
+			ch.Detail = derr2.Error()
+		}
+		add(ch)
 
-	if derr2 == nil {
-		ok := winapi.GSIInstalled(dota, a.gsiURI(c), c.GSI.Token)
-		ch = Check{ID: "gsi", Title: "Game State Integration (таймеры)", OK: ok}
-		if ok {
-			ch.Detail = "установлен"
+		if derr2 == nil {
+			ok := winapi.GSIInstalled(dota, a.gsiURI(c), c.GSI.Token)
+			ch = Check{ID: "gsi", Title: "Game State Integration (таймеры)", OK: ok}
+			if ok {
+				ch.Detail = "установлен"
+			} else {
+				ch.Detail = "не установлен"
+				ch.Fix, ch.FixLbl = "gsi", "Установить"
+			}
+			add(ch)
+
+			has, lerr := winapi.HasLaunchOption(root)
+			ch = Check{ID: "launch", Title: "Параметр запуска -gamestateintegration", OK: has}
+			switch {
+			case lerr != nil:
+				ch.Detail = lerr.Error()
+				ch.Manual = "Steam → Dota 2 → Свойства → Параметры запуска: -gamestateintegration"
+			case has:
+				ch.Detail = "добавлен"
+			default:
+				ch.Detail = "не добавлен"
+				ch.Fix, ch.FixLbl = "launch", "Добавить"
+				if winapi.SteamRunning() {
+					ch.Detail += " (Steam будет перезапущен)"
+				}
+			}
+			add(ch)
+
+			key, file, kerr := winapi.FindVoiceKey(root, dota)
+			ch = Check{ID: "ptt", Title: "Кнопка голосового чата"}
+			switch {
+			case c.PTT.Key != "" && (kerr != nil || key == c.PTT.Key):
+				ch.OK, ch.Detail = true, c.PTT.Key
+				if kerr == nil {
+					ch.Detail += " (совпадает с биндом Dota 2)"
+				}
+			case kerr == nil:
+				ch.Detail = fmt.Sprintf("в Dota 2 назначена %s, в программе — %q", key, c.PTT.Key)
+				ch.Fix, ch.FixLbl = "ptt", "Взять из Dota 2"
+			default:
+				ch.Detail = kerr.Error()
+				ch.Manual = "Укажите клавишу вручную: «Настройки → Кнопка голосового чата»"
+			}
+			_ = file
+			add(ch)
+		}
+
+		a.gsiMu.Lock()
+		conn := !a.lastGSI.IsZero() && time.Since(a.lastGSI) < 40*time.Second
+		a.gsiMu.Unlock()
+		ch = Check{ID: "gsi_live", Title: "Связь с игрой", OK: conn}
+		if conn {
+			ch.Detail = "Dota 2 передаёт данные"
+		} else if winapi.DotaRunning() {
+			ch.Detail = "Dota 2 запущена, но данных нет — перезапустите игру после установки GSI"
 		} else {
-			ch.Detail = "не установлен"
-			ch.Fix, ch.FixLbl = "gsi", "Установить"
+			ch.Detail = "появится, когда вы запустите Dota 2"
 		}
-		add(ch)
-
-		has, lerr := winapi.HasLaunchOption(root)
-		ch = Check{ID: "launch", Title: "Параметр запуска -gamestateintegration", OK: has}
-		switch {
-		case lerr != nil:
-			ch.Detail = lerr.Error()
-			ch.Manual = "Steam → Dota 2 → Свойства → Параметры запуска: -gamestateintegration"
-		case has:
-			ch.Detail = "добавлен"
-		default:
-			ch.Detail = "не добавлен"
-			ch.Fix, ch.FixLbl = "launch", "Добавить"
-			if winapi.SteamRunning() {
-				ch.Detail += " (Steam будет перезапущен)"
-			}
-		}
-		add(ch)
-
-		key, file, kerr := winapi.FindVoiceKey(root, dota)
-		ch = Check{ID: "ptt", Title: "Кнопка голосового чата"}
-		switch {
-		case c.PTT.Key != "" && (kerr != nil || key == c.PTT.Key):
-			ch.OK, ch.Detail = true, c.PTT.Key
-			if kerr == nil {
-				ch.Detail += " (совпадает с биндом Dota 2)"
-			}
-		case kerr == nil:
-			ch.Detail = fmt.Sprintf("в Dota 2 назначена %s, в программе — %q", key, c.PTT.Key)
-			ch.Fix, ch.FixLbl = "ptt", "Взять из Dota 2"
-		default:
-			ch.Detail = kerr.Error()
-			ch.Manual = "Укажите клавишу вручную в разделе «Настройка → Голосовой чат»"
-		}
-		_ = file
 		add(ch)
 	}
-
-	a.gsiMu.Lock()
-	conn := !a.lastGSI.IsZero() && time.Since(a.lastGSI) < 40*time.Second
-	a.gsiMu.Unlock()
-	ch = Check{ID: "gsi_live", Title: "Связь с игрой", OK: conn}
-	if conn {
-		ch.Detail = "Dota 2 передаёт данные"
-	} else if winapi.DotaRunning() {
-		ch.Detail = "Dota 2 запущена, но данных нет — перезапустите игру после установки GSI"
-	} else {
-		ch.Detail = "появится, когда вы запустите Dota 2"
-	}
-	add(ch)
 
 	st.AllOK = true
 	for _, c := range st.Checks {
@@ -280,11 +282,11 @@ func (a *App) AutoSetup(allowSteamRestart bool) []string {
 		}
 		switch ch.Fix {
 		case "cable":
-			note("VB-Cable не найден — нажмите «Скачать и установить» во вкладке «Настройка»")
+			note("VB-Cable не найден — нажмите «Скачать и установить» на странице «Проверка»")
 			continue
 		case "launch":
 			if winapi.SteamRunning() && !allowSteamRestart {
-				note("параметр запуска: нужно перезапустить Steam — подтвердите во вкладке «Настройка»")
+				note("параметр запуска: нужно перезапустить Steam — подтвердите на странице «Dota 2» или «Проверка»")
 				continue
 			}
 		}
@@ -294,7 +296,6 @@ func (a *App) AutoSetup(allowSteamRestart bool) []string {
 			note("%s ✓", ch.Title)
 		}
 	}
-	a.UpdateConfig(func(c *config.Config) { c.SetupDone = true })
 	return report
 }
 

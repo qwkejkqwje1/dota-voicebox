@@ -96,3 +96,45 @@ func Name(code uint32) string {
 	}
 	return best
 }
+
+var display = map[string]string{
+	"TILDE": "~", "`": "~", "ESC": "Esc", "SPACE": "Пробел", "ENTER": "Enter", "TAB": "Tab", "BACKSPACE": "Backspace",
+	"PAUSE": "Pause", "CAPSLOCK": "CapsLock", "SCROLLLOCK": "ScrollLock", "PAGEUP": "PgUp", "PAGEDOWN": "PgDn",
+	"END": "End", "HOME": "Home", "INSERT": "Ins", "DELETE": "Del", "LEFT": "←", "RIGHT": "→", "UP": "↑", "DOWN": "↓",
+	"NUMMUL": "Num *", "NUMADD": "Num +", "NUMSUB": "Num −", "NUMDOT": "Num .", "NUMDIV": "Num /",
+	"MOUSE3": "Колёсико", "MOUSE4": "Мышь 4", "MOUSE5": "Мышь 5",
+	"LSHIFT": "Левый Shift", "RSHIFT": "Правый Shift", "LCTRL": "Левый Ctrl", "RCTRL": "Правый Ctrl", "LALT": "Левый Alt", "RALT": "Правый Alt",
+}
+
+// Display — подпись для человека: "Alt+TILDE" → "Alt+~", "Ctrl+Num1" → "Ctrl+Num 1".
+func Display(s string) string {
+	if strings.TrimSpace(s) == "" {
+		return ""
+	}
+	parts := strings.Split(strings.ReplaceAll(s, " ", ""), "+")
+	for i, p := range parts {
+		up := strings.ToUpper(p)
+		if i < len(parts)-1 {
+			switch up {
+			case "CTRL", "CONTROL":
+				parts[i] = "Ctrl"
+			case "ALT":
+				parts[i] = "Alt"
+			case "SHIFT":
+				parts[i] = "Shift"
+			case "WIN":
+				parts[i] = "Win"
+			}
+			continue
+		}
+		switch {
+		case display[up] != "":
+			parts[i] = display[up]
+		case strings.HasPrefix(up, "NUM") && len(up) == 4:
+			parts[i] = "Num " + up[3:]
+		default:
+			parts[i] = up
+		}
+	}
+	return strings.Join(parts, "+")
+}

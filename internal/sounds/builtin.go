@@ -4,6 +4,7 @@ import (
 	"math"
 	"math/rand"
 	"sort"
+	"sync"
 )
 
 // Встроенные звуки синтезируются в коде — не нужны файлы в репозитории.
@@ -20,7 +21,34 @@ var builtins = map[string]func() Clip{
 	"danger":      danger, // короткий тревожный сигнал
 }
 
-// BuiltinNames — список для справки.
+type meta struct{ label, emoji, group string }
+
+// Подписи встроенных звуков для интерфейса.
+var builtinMeta = map[string]meta{
+	"airhorn":      {"Дудка", "📯", "fun"},
+	"sad_trombone": {"Грустный тромбон", "🎺", "fun"},
+	"rimshot":      {"Ба-дум-тсс", "🥁", "fun"},
+	"drumroll":     {"Барабанная дробь", "🥁", "fun"},
+	"crickets":     {"Сверчки", "🦗", "fun"},
+	"ding":         {"Правильно!", "✅", "fun"},
+	"buzzer":       {"Неправильно!", "❌", "fun"},
+	"laser":        {"Пиу-пиу", "🔫", "fun"},
+	"boing":        {"Боинг", "🌀", "fun"},
+	"siren":        {"Сирена", "🚨", "signal"},
+	"danger":       {"Тревога", "⚠️", "signal"},
+	"beep":         {"Бип", "🔔", "signal"},
+	"chime":        {"Колокольчик", "🛎️", "signal"},
+	"alert":        {"Короткая сирена", "🚨", "signal"},
+	"beep2":        {"Пик-пик", "📣", "signal"},
+	"wisdom_rune":  {"Руна мудрости", "📘", "dota"},
+	"mid_rune_6":   {"Руна силы 6:00", "🔮", "dota"},
+	"power_rune":   {"Руна силы", "🔮", "dota"},
+	"bounty_rune":  {"Руна богатства", "💰", "dota"},
+	"rosh":         {"Рошан", "🐲", "dota"},
+	"stack":        {"Стак", "⏱️", "dota"},
+}
+
+// BuiltinNames — список встроенных звуков (по алфавиту).
 func BuiltinNames() []string {
 	var n []string
 	for k := range builtins {
@@ -30,12 +58,49 @@ func BuiltinNames() []string {
 	return n
 }
 
+// BuiltinInfo — встроенный звук для библиотеки в интерфейсе.
+type BuiltinInfo struct {
+	ID       string  `json:"id"`
+	Label    string  `json:"label"`
+	Emoji    string  `json:"emoji"`
+	Group    string  `json:"group"`
+	Duration float64 `json:"duration"`
+}
+
+func BuiltinInfos() []BuiltinInfo {
+	var out []BuiltinInfo
+	for _, n := range BuiltinNames() {
+		c, _ := Builtin(n)
+		m := builtinMeta[n]
+		if m.label == "" {
+			m = meta{n, "🔊", "signal"}
+		}
+		out = append(out, BuiltinInfo{ID: n, Label: m.label, Emoji: m.emoji, Group: m.group,
+			Duration: math.Round(float64(len(c))/SampleRate*10) / 10})
+	}
+	return out
+}
+
+var (
+	builtinMu    sync.Mutex
+	builtinCache = map[string]Clip{}
+)
+
+// Builtin возвращает встроенный звук. Звуки синтезируются один раз и кэшируются:
+// возвращаемый срез общий — его нельзя менять.
 func Builtin(name string) (Clip, bool) {
 	f, ok := builtins[name]
 	if !ok {
 		return nil, false
 	}
-	return f(), true
+	builtinMu.Lock()
+	defer builtinMu.Unlock()
+	if c, ok := builtinCache[name]; ok {
+		return c, true
+	}
+	c := f()
+	builtinCache[name] = c
+	return c, true
 }
 
 const sr = float64(SampleRate)

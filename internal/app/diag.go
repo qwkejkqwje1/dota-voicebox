@@ -95,7 +95,7 @@ func (a *App) testMonitor(d Diagnoser) (*TestResult, error) {
 		if a.Config().MonitorVolume == 0 {
 			r.Details = append(r.Details, "Громкость «Звуки для вас» = 0 — поднимите её на главной")
 		}
-		r.Details = append(r.Details, "Проверьте устройство «Наушники» на вкладке «Настройка»")
+		r.Details = append(r.Details, "Проверьте устройство «Наушники» в «Настройках»")
 		return r, nil
 	}
 	r.Verdict = "ok"
@@ -114,15 +114,15 @@ func (a *App) testCable(d Diagnoser) (*TestResult, error) {
 	r := &TestResult{ID: "cable"}
 	if err != nil {
 		r.Verdict, r.Summary = "fail", "Не удалось слушать кабель: "+err.Error()
-		r.Details = []string{"Убедитесь, что установлен VB-Audio Virtual Cable (вкладка «Настройка»)"}
+		r.Details = []string{"Убедитесь, что установлен VB-Audio Virtual Cable (страница «Проверка»)"}
 		return r, nil
 	}
 	onset, lvl := audio.ToneOnset(buf, sr, 1000)
 	if onset < 0 {
 		r.Verdict = "fail"
-		r.Summary = fmt.Sprintf("Тестовый тон не пришёл в «%s» — Dota не услышит звуки и голос", name)
+		r.Summary = fmt.Sprintf("Тестовый тон не пришёл в «%s» — программы не услышат звуки и голос", name)
 		r.Details = []string{
-			"Проверьте, что «Голос в Dota» = CABLE Input (вкладка «Настройка»)",
+			"Проверьте, что в «Настройках → Устройства» виртуальный кабель = CABLE Input",
 			"Windows → Звук → Запись → CABLE Output: громкость не 0 и устройство включено",
 		}
 		return r, nil
@@ -147,7 +147,7 @@ func micVerdict(st audio.Stats, gain float64) (string, string, []string) {
 	switch {
 	case st.Silent:
 		return "fail", "Микрофон молчит", []string{
-			"Проверьте устройство «Микрофон» на вкладке «Настройка» и кнопку mute на гарнитуре",
+			"Проверьте устройство «Микрофон» в «Настройках» и кнопку mute на гарнитуре",
 			"Windows → Параметры → Конфиденциальность → Микрофон: разрешить классическим приложениям",
 		}
 	case st.ClipPct > 0.1:
@@ -263,7 +263,7 @@ func (a *App) testPTT() (*TestResult, error) {
 	r := &TestResult{ID: "ptt"}
 	if c.PTT.Key == "" {
 		r.Verdict, r.Summary = "fail", "Кнопка голосового чата не задана"
-		r.Details = []string{"Вкладка «Настройка» → «Кнопка голосового чата» или назначьте её в Dota 2 и нажмите «Найти»"}
+		r.Details = []string{"«Настройки» → «Кнопка голосового чата»: назначьте её или возьмите из Dota 2"}
 		return r, nil
 	}
 	k, err := keys.Parse(c.PTT.Key)

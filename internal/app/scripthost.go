@@ -51,18 +51,15 @@ func (h *scriptHost) Say(text, to string) error {
 		bus = "both"
 	}
 	h.a.mu.Lock()
-	tts := h.a.tts
+	sp := h.a.speech
 	h.a.mu.Unlock()
-	if tts == nil {
+	if sp == nil {
 		return fmt.Errorf("синтез речи недоступен на этой системе")
 	}
 	go func() {
-		clip, err := tts(text)
-		if err != nil {
+		if err := h.a.Say(text, sounds.ParseBus(bus)); err != nil {
 			h.a.logf("say: %v", err)
-			return
 		}
-		h.a.playClip("say", clip, 1, "", sounds.ParseBus(bus))
 	}()
 	return nil
 }

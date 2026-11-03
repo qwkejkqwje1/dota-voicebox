@@ -1,5 +1,5 @@
 {
-  "version": 2,
+  "version": 3,
   "devices": {
     "mic": "",
     "voice_out": "",
@@ -28,47 +28,95 @@
   },
 
   "start_preset": "clean",
+  "preset_params": {},
   "sounds_dir": "sounds",
   "tts_rate": 1,
 
   "sounds": {
-    "siren":       { "label": "🚨 Мид ганкают", "files": ["builtin:siren"], "bus": "both", "cooldown": 3, "mode": "interrupt", "volume": 0.9 },
-    "wisdom_rune": { "files": ["builtin:wisdom_rune"], "bus": "monitor", "mode": "ignore" },
-    "mid_rune_6":  { "files": ["builtin:mid_rune_6"], "bus": "monitor", "mode": "ignore" },
-    "power_rune":  { "files": ["builtin:power_rune"], "bus": "monitor", "mode": "ignore" },
-    "bounty_rune": { "files": ["builtin:bounty_rune"], "bus": "monitor", "mode": "ignore" },
-    "rosh":        { "files": ["builtin:rosh"], "bus": "monitor" },
-    "low_hp":      { "files": ["builtin:danger"], "bus": "monitor", "cooldown": 8 }
+    "airhorn":      { "label": "Дудка", "emoji": "📯", "color": "#f59e0b", "files": ["builtin:airhorn"], "mode": "toggle" },
+    "sad_trombone": { "label": "Грустный тромбон", "emoji": "🎺", "color": "#60a5fa", "files": ["builtin:sad_trombone"], "mode": "toggle" },
+    "rimshot":      { "label": "Ба-дум-тсс", "emoji": "🥁", "color": "#a78bfa", "files": ["builtin:rimshot"], "mode": "toggle" },
+    "drumroll":     { "label": "Барабанная дробь", "emoji": "🪘", "color": "#fb923c", "files": ["builtin:drumroll"], "mode": "toggle" },
+    "crickets":     { "label": "Сверчки", "emoji": "🦗", "color": "#34d399", "files": ["builtin:crickets"], "mode": "toggle" },
+    "ding":         { "label": "Правильно!", "emoji": "✅", "color": "#22c55e", "files": ["builtin:ding"], "mode": "toggle" },
+    "buzzer":       { "label": "Неправильно!", "emoji": "❌", "color": "#ef4444", "files": ["builtin:buzzer"], "mode": "toggle" },
+    "laser":        { "label": "Пиу-пиу", "emoji": "🔫", "color": "#22d3ee", "files": ["builtin:laser"], "mode": "overlap" },
+    "boing":        { "label": "Боинг", "emoji": "🌀", "color": "#f472b6", "files": ["builtin:boing"], "mode": "overlap" },
+
+    "dota_gank":  { "label": "Ганк на миде!", "emoji": "🚨", "color": "#ef4444", "category": "Dota 2", "dota": true,
+                    "files": ["builtin:alert", "tts:Мид, ганк!"], "seq": true, "mode": "interrupt", "cooldown": 2 },
+    "dota_mia":   { "label": "Мид пропал", "emoji": "❓", "color": "#f59e0b", "category": "Dota 2", "dota": true,
+                    "files": ["builtin:beep2", "tts:Мид пропал!"], "seq": true, "mode": "interrupt", "cooldown": 2 },
+    "dota_smoke": { "label": "Смоук!", "emoji": "🌫️", "color": "#94a3b8", "category": "Dota 2", "dota": true,
+                    "files": ["builtin:beep2", "tts:Осторожно, смоук!"], "seq": true, "mode": "interrupt", "cooldown": 2 },
+    "dota_rosh":  { "label": "На Рошана", "emoji": "🐲", "color": "#a78bfa", "category": "Dota 2", "dota": true,
+                    "files": ["tts:Идём на Рошана!"], "mode": "interrupt", "cooldown": 2 },
+    "dota_def":   { "label": "Все на деф", "emoji": "🛡️", "color": "#60a5fa", "category": "Dota 2", "dota": true,
+                    "files": ["builtin:beep2", "tts:Все на деф!"], "seq": true, "mode": "interrupt", "cooldown": 2 },
+    "low_hp":     { "files": ["builtin:danger"], "bus": "monitor", "cooldown": 8, "dota": true, "hidden": true }
   },
+  "pad": ["airhorn", "sad_trombone", "rimshot", "drumroll", "crickets", "ding", "buzzer", "laser", "boing",
+          "dota_gank", "dota_mia", "dota_smoke", "dota_rosh", "dota_def"],
 
   "hotkeys": {
-    "Num2":   "sound:wisdom_rune@both",
-    "Num3":   "sound:mid_rune_6@both",
-    "Num0":   "preset:clean",
-    "Num4":   "preset:dead_inside",
-    "Num5":   "preset:dead_inside_max",
-    "Num6":   "preset:radio",
-    "Num7":   "preset:radio_broken",
-    "Num8":   "preset:megaphone",
-    "Num9":   "preset:robot",
-    "NumAdd": "preset:next",
-    "NumSub": "rosh",
-    "NumMul": "mic_monitor",
-    "NumDot": "stop",
-    "NumDiv": "reload",
-    "Ctrl+Alt+V": "ui"
+    "Alt+TILDE": "menu",
+    "Pause": "stop",
+    "Ctrl+Alt+V": "ui",
+    "Num1": "sound:dota_gank",
+    "Ctrl+Num1": "sound:dota_mia"
   },
 
-  "timers": [
-    { "id": "mid_rune_6",  "label": "Руна в миду 6:00", "sound": "mid_rune_6",  "at": [360], "warn_before": 10 },
-    { "id": "wisdom_rune", "label": "Руна мудрости", "sound": "wisdom_rune", "start": 420, "every": 420, "warn_before": 20 },
-    { "id": "power_rune",  "label": "Руна силы", "sound": "power_rune",  "start": 360, "every": 120, "skip": [360], "warn_before": 10, "disabled": true },
-    { "id": "bounty_rune", "label": "Руна богатства", "sound": "bounty_rune", "start": 180, "every": 180, "warn_before": 10, "disabled": true },
-    { "id": "stack",       "label": "Стак крипов", "sound": "stack@monitor", "start": 50, "every": 60, "until": 1200, "disabled": true }
-  ],
+  "quick_menu": {
+    "enabled": true,
+    "items": [],
+    "effects": [],
+    "layout": "list",
+    "position": "center",
+    "x": 0.5,
+    "y": 0,
+    "monitor": "game",
+    "opacity": 0.95,
+    "close_after_pick": true,
+    "timeout_sec": 8,
+    "show_effects": true,
+    "scale": 1
+  },
+
+  "wheel": {
+    "enabled": false,
+    "items": [],
+    "center": "cursor",
+    "scale": 1,
+    "opacity": 0.92
+  },
+
+  "remote": {
+    "enabled": false,
+    "port": 0,
+    "key": "",
+    "sounds": "pad",
+    "show_effects": true,
+    "show_mic": true
+  },
+
+  "dota": {
+    "enabled": false,
+    "voice_to": "monitor",
+    "volume": 1,
+    "rosh": true,
+    "reminders": [
+      { "id": "wisdom", "label": "Руна мудрости", "enabled": true, "start": 420, "every": 420, "before": 20 },
+      { "id": "power",  "label": "Руны силы", "enabled": true, "at": [360], "before": 10 },
+      { "id": "support_runes", "label": "Саппорты к рунам", "enabled": true, "at": [360], "before": 40, "to": "both",
+        "say": "Саппорты, руны силы {время}. Перетянитесь и подконтрольте руны" },
+      { "id": "water",  "label": "Водная руна", "enabled": false, "at": [120, 240], "before": 10 },
+      { "id": "bounty", "label": "Руны богатства", "enabled": false, "start": 180, "every": 180, "before": 10 },
+      { "id": "lotus",  "label": "Лотосы", "enabled": false, "start": 180, "every": 180, "until": 540, "before": 10 },
+      { "id": "stack",  "label": "Стак крипов", "enabled": false, "start": 60, "every": 60, "until": 1200, "before": 7, "say": "Стак" }
+    ]
+  },
 
   "rosh": {
-    "sound": "rosh",
     "aegis_warn": 30,
     "min_warn": 30
   },
@@ -87,17 +135,19 @@
   "voice_presets": {},
 
   "scripts": {
-    "gank_mid": true
+    "gank_mid": false
   },
 
   "ui": {
     "port": 3001,
-    "keep_running_on_close": false,
+    "keep_running_on_close": true,
     "open_on_start": true
   },
   "setup_done": false,
 
-  "mic": { "mute": false, "gate_db": 0 },
+  "mic": { "mute": false, "gate_db": 0, "denoise": true, "denoise_level": 0.92, "timbre": "", "smooth": 0.4 },
+  "background": { "id": "", "volume": 0.3, "only_talking": true },
+  "auto_set": true,
   "sources": [],
   "update": { "auto_check": true, "auto_install": true }
 }

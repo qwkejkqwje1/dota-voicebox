@@ -5,7 +5,10 @@ import (
 	"encoding/json"
 	"io"
 	"log"
+	"net"
 	"net/http"
+	"sync"
+	"time"
 )
 
 type State struct {
@@ -144,6 +147,9 @@ type Server struct {
 	Addr    string
 	Token   string
 	OnState func(st *State, raw []byte)
+
+	mu  sync.Mutex
+	srv *http.Server
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -165,4 +171,29 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) Run() error {
 	return http.ListenAndServe(s.Addr, s)
+}
+
+// Start начинает слушать адрес в фоне (ошибка — если порт занят).
+func (s *Server) Start() error {
+	ln, err := net.Listen("tcp", s.Addr)
+	if err != nil {
+		return err
+	}
+	srv := &http.Server{Handler: s, ReadHeaderTimeout: 5 * time.Second}
+	s.mu.Lock()
+	s.srv = srv
+	s.mu.Unlock()
+	go srv.Serve(ln)
+	return nil
+}
+
+// Close останавливает сервер, запущенный через Start.
+func (s *Server) Close() {
+	s.mu.Lock()
+	srv := s.srv
+	s.srv = nil
+	s.mu.Unlock()
+	if srv != nil {
+		srv.Close()
+	}
 }
