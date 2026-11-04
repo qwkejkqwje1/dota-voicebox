@@ -1,4 +1,5 @@
 // Журнал — что происходит в программе (для поиска проблем).
+import {_t} from '../i18n.js';
 import {app, h, onLive, toast} from '../core.js';
 
 let q = '';
@@ -15,8 +16,8 @@ export default function logPage() {
   setTimeout(fill);
   return h('div', {},
     h('div', {class: 'row', style: 'margin-bottom:12px'},
-      h('div', {class: 'search'}, h('input', {class: 'input', type: 'search', placeholder: 'Фильтр…', value: q, oninput: e => { q = e.target.value.toLowerCase(); fill(); }})),
+      h('div', {class: 'search'}, h('input', {class: 'input', type: 'search', placeholder: _t('Фильтр…'), value: q, oninput: e => { q = e.target.value.toLowerCase(); fill(); }})),
       h('div', {class: 'grow'}),
-      h('button', {class: 'btn sm', onclick: () => { navigator.clipboard.writeText((app.state.logs || []).join('\n')).then(() => toast('Журнал скопирован', 'ok'), () => toast('Не удалось скопировать', 'err')); }}, '📋 Скопировать')),
+      h('button', {class: 'btn sm', onclick: () => { navigator.clipboard.writeText((app.state.logs || []).join('\n')).then(() => toast(_t('Журнал скопирован'), 'ok'), () => toast(_t('Не удалось скопировать'), 'err')); }}, _t('📋 Скопировать'))),
     box);
 }

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/qwkejkqwje1/dota-voicebox/internal/config"
+	"github.com/qwkejkqwje1/dota-voicebox/internal/i18n"
 	"github.com/qwkejkqwje1/dota-voicebox/internal/sounds"
 	"github.com/qwkejkqwje1/dota-voicebox/internal/winapi"
 )
@@ -61,7 +62,7 @@ func SetTitle(cfg *config.Config, id string) (title, emoji string) {
 	if set := cfg.Set(id); set != nil {
 		return set.Name, or(set.Emoji, "🗂️")
 	}
-	return "Все звуки", "🎛️"
+	return i18n.T("Все звуки"), "🎛️"
 }
 
 // SetActiveSet включает набор ("" — все звуки).

@@ -12,6 +12,7 @@ import (
 	"github.com/qwkejkqwje1/dota-voicebox/internal/audio"
 	"github.com/qwkejkqwje1/dota-voicebox/internal/config"
 	"github.com/qwkejkqwje1/dota-voicebox/internal/dsp"
+	"github.com/qwkejkqwje1/dota-voicebox/internal/i18n"
 	"github.com/qwkejkqwje1/dota-voicebox/internal/sounds"
 	"github.com/qwkejkqwje1/dota-voicebox/internal/winapi"
 )
@@ -70,7 +71,43 @@ func (s *Server) api2() map[string]func(*http.Request) (any, error) {
 		"POST /api/sounds/wave/done": func(*http.Request) (any, error) { s.App.WaveDone(); return nil, nil },
 		"POST /api/sounds/trim":      s.trimSound,
 		"POST /api/dota/events":      s.dotaEvent,
+		"GET /api/reader":            func(*http.Request) (any, error) { return s.App.ReaderInfo(), nil },
+		"POST /api/reader":           s.setReader,
+		"POST /api/reader/say":       s.readerSay,
+		"POST /api/reader/repeat":    func(*http.Request) (any, error) { return nil, s.App.ReadRepeat() },
+		"POST /api/reader/stop":      func(*http.Request) (any, error) { s.App.ReadStop(); return nil, nil },
 	}
+}
+
+// setReader — настройки «Читалки» (персонаж, кто слышит, чтение чата).
+func (s *Server) setReader(r *http.Request) (any, error) {
+	var req struct {
+		Reader config.Reader `json:"reader"`
+	}
+	if err := decode(r, &req); err != nil {
+		return nil, err
+	}
+	return s.ok(r, s.App.SetReader(req.Reader))
+}
+
+// readerSay — прочитать текст голосом персонажа (to: both | voice | monitor, "" — из настроек).
+func (s *Server) readerSay(r *http.Request) (any, error) {
+	var req struct {
+		Text    string `json:"text"`
+		Voice   string `json:"voice"`
+		To      string `json:"to"`
+		Preview bool   `json:"preview"` // проба голоса: только себе, без истории
+	}
+	if err := decode(r, &req); err != nil {
+		return nil, err
+	}
+	if req.Preview {
+		return nil, s.App.ReadPreview(req.Text, req.Voice)
+	}
+	if err := s.App.Read(req.Text, req.Voice, req.To); err != nil {
+		return nil, err
+	}
+	return s.App.ReaderInfo(), nil
 }
 
 // rangeReq — кусок звука: с какой секунды и до какой (0 — до конца).
@@ -195,7 +232,10 @@ func (s *Server) state(*http.Request) (any, error) {
 	for _, inf := range s.App.Sounds() {
 		v := soundView{Info: inf, Hotkey: hk["sound:"+inf.ID], InMenu: inMenu[inf.ID], OnPad: onPad[inf.ID]}
 		v.Kind, v.Text = soundKind(inf.Files)
-		v.Title = inf.Label
+		if inf.Source == "builtin" { // встроенный звук без описания в конфиге — подпись на языке интерфейса
+			v.Label = i18n.T(inf.Label)
+		}
+		v.Title = v.Label
 		if v.Title == "" {
 			v.Title = app.DisplayLabel(&sounds.Sound{ID: inf.ID})
 		}
@@ -242,11 +282,13 @@ func (s *Server) state(*http.Request) (any, error) {
 		"status":     s.App.Status(),
 		"sounds_dir": s.App.SoundsDir(),
 		"autostart":  winapi.Autostart(),
+		"shortcuts":  map[string]bool{"start": winapi.HasShortcut("start"), "desktop": winapi.HasShortcut("desktop")},
 		"reminders":  reminderViews(cfg),
 		"voice": map[string]any{"timbres": dsp.Timbres, "eq_bands": dsp.EQBands, "eq_max": dsp.EQMax,
 			"ambiences": dsp.Ambiences},
 		"games":       app.KnownGames,
 		"recent_apps": s.App.RecentApps(),
+		"reader":      s.App.ReaderInfo(),
 	}, nil
 }
 
@@ -682,6 +724,16 @@ func (s *Server) settings(r *http.Request) (any, error) {
 	var req map[string]any
 	if err := decode(r, &req); err != nil {
 		return nil, err
+	}
+	if v, ok := req["ui_lang"]; ok { // язык интерфейса (окно после этого перезагружается)
+		l, _ := v.(string)
+		delete(req, "ui_lang")
+		if err := s.App.SetUILang(l); err != nil {
+			return nil, err
+		}
+		if len(req) == 0 {
+			return s.ok(r, nil)
+		}
 	}
 	var bad []string
 	update := s.App.UpdateEnhance

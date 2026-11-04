@@ -62,6 +62,7 @@
     "Alt+TILDE": "menu",
     "Pause": "stop",
     "Ctrl+Alt+V": "ui",
+    "Ctrl+Alt+R": "reader",
     "Num1": "sound:dota_gank",
     "Ctrl+Num1": "sound:dota_mia"
   },
@@ -90,6 +91,21 @@
     "opacity": 0.92
   },
 
+  "ui_lang": "",
+  "reader": {
+    "voice": "sly",
+    "to": "both",
+    "volume": 1,
+    "chat": {
+      "enabled": false,
+      "to": "monitor",
+      "all": true,
+      "team": true,
+      "own": false,
+      "wheel": false,
+      "max_len": 120
+    }
+  },
   "remote": {
     "enabled": false,
     "port": 0,

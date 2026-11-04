@@ -18,6 +18,7 @@ import (
 
 	"github.com/qwkejkqwje1/dota-voicebox/internal/app"
 	"github.com/qwkejkqwje1/dota-voicebox/internal/config"
+	"github.com/qwkejkqwje1/dota-voicebox/internal/i18n"
 )
 
 // Пульт с телефона: отдельный маленький веб-сервер на всех адресах компьютера (сам интерфейс
@@ -300,7 +301,7 @@ func (r *Remote) serve(w http.ResponseWriter, req *http.Request) {
 	h.Set("Cache-Control", "no-store")
 	now := time.Now()
 	if r.blocked(ip, now) {
-		http.Error(w, "слишком много неверных попыток, подождите", http.StatusTooManyRequests)
+		http.Error(w, i18n.T("слишком много неверных попыток, подождите"), http.StatusTooManyRequests)
 		return
 	}
 	key, rest, slash := strings.Cut(strings.TrimPrefix(req.URL.Path, "/"), "/")
@@ -310,7 +311,7 @@ func (r *Remote) serve(w http.ResponseWriter, req *http.Request) {
 		}
 		h.Set("Content-Type", "text/html; charset=utf-8")
 		w.WriteHeader(http.StatusNotFound)
-		fmt.Fprint(w, remoteNotFound)
+		fmt.Fprint(w, i18n.HTML(remoteNotFound))
 		return
 	}
 	if !slash { // /ключ → /ключ/ (иначе относительные адреса страницы не сработают)
@@ -351,8 +352,14 @@ func (r *Remote) serve(w http.ResponseWriter, req *http.Request) {
 	if t := staticTypes[path.Ext(file)]; t != "" {
 		h.Set("Content-Type", t)
 	}
-	if file == "remote/manifest.json" {
+	switch file { // английский интерфейс — и пульт по-английски
+	case "remote/index.html":
+		b = []byte(i18n.HTML(string(b)))
+	case "remote/remote.js":
+		b = i18n.JS(b)
+	case "remote/manifest.json":
 		h.Set("Content-Type", "application/manifest+json")
+		b = i18n.TranslateJSON(b)
 	}
 	w.Write(b)
 }
@@ -469,13 +476,16 @@ func (r *Remote) api(w http.ResponseWriter, req *http.Request, name string) {
 	w.Header().Set("Content-Type", "application/json")
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(map[string]string{"error": strings.TrimPrefix(err.Error(), "звук ")})
+		msg := i18n.T(err.Error())
+		msg = strings.TrimPrefix(strings.TrimPrefix(msg, "звук "), "sound ")
+		json.NewEncoder(w).Encode(map[string]string{"error": msg})
 		return
 	}
 	if res == nil {
 		res = r.live()
 	}
-	json.NewEncoder(w).Encode(res)
+	b, _ := i18n.JSON(res)
+	w.Write(append(b, '\n'))
 }
 
 // events — поток событий для телефона: что играет, эффект, микрофон (при изменениях) и «пинг».
@@ -494,7 +504,7 @@ func (r *Remote) events(w http.ResponseWriter, req *http.Request, ip netip.Addr)
 	last, lastSent := "", time.Now()
 	fmt.Fprint(w, "retry: 2000\n\n")
 	for {
-		b, _ := json.Marshal(r.live())
+		b, _ := i18n.JSON(r.live())
 		switch {
 		case string(b) != last:
 			fmt.Fprintf(w, "event: live\ndata: %s\n\n", b)

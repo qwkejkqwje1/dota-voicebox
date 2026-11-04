@@ -1,6 +1,7 @@
 // Колесо звуков (как колесо чата в Dota 2): включение, клавиша, 8 секторов, вид.
 // Превью повторяет колесо поверх игры (internal/overlay/wheel_draw.go): те же радиусы, зазоры и цвета.
 // Сектор — щелчок (выбрать, что в нём) или перетаскивание на другой сектор (поменять местами).
+import {_t} from '../i18n.js';
 import {app, h, act, kbd, bindKey, slider, seg, toggle, setrow, hint, toast, clone, dialog, icon, keyLabel} from '../core.js';
 import {padSounds, setNote} from './sounds.js';
 
@@ -8,7 +9,7 @@ const N = 8, RIN = 66, ROUT = 178, GAP = 6, POP = 7, CR = 56, MARGIN = 22;
 const SIZE = 2 * (ROUT + POP + MARGIN), C = SIZE / 2;
 const STEP = 2 * Math.PI / N;
 const ARROWS = ['↑', '↗', '→', '↘', '↓', '↙', '←', '↖'];
-const DIRS = ['вверх', 'вверх-вправо', 'вправо', 'вниз-вправо', 'вниз', 'вниз-влево', 'влево', 'вверх-влево'];
+const DIRS = [_t('вверх'), _t('вверх-вправо'), _t('вправо'), _t('вниз-вправо'), _t('вниз'), _t('вниз-влево'), _t('влево'), _t('вверх-влево')];
 const FONT = '"Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif';
 
 const wcfg = () => clone(app.state.config.wheel);
@@ -19,21 +20,21 @@ const f2 = v => v.toFixed(2);
 export default function wheelPage() {
   const w = wcfg(), wh = app.state.wheel || {items: [], auto: true};
   const top = h('div', {class: 'card'},
-    setrow('Колесо звуков', 'Как колесо чата в Dota 2: зажали клавишу — вокруг курсора 8 звуков, повели мышь к нужному — отпустили.',
+    setrow(_t('Колесо звуков'), _t('Как колесо чата в Dota 2: зажали клавишу — вокруг курсора 8 звуков, повели мышь к нужному — отпустили.'),
       toggle(w.enabled, async v => {
         w.enabled = v;
-        const r = await save(w, {ok: v ? '🎯 Колесо включено' : 'Колесо выключено'});
+        const r = await save(w, {ok: v ? _t('🎯 Колесо включено') : _t('Колесо выключено')});
         if (r && v && !(app.state.wheel || {}).key) bindWheelKey();
       }, {big: true})),
     w.enabled ? [
-      setrow('Клавиша', 'Держите — колесо на экране. Отпустите — прозвучит выбранный звук.', kbd(wh.key, {onclick: bindWheelKey, empty: 'назначить'})),
+      setrow(_t('Клавиша'), _t('Держите — колесо на экране. Отпустите — прозвучит выбранный звук.'), kbd(wh.key, {onclick: bindWheelKey, empty: _t('назначить')})),
       h('div', {class: 'row', style: 'padding-top:12px;border-top:1px solid var(--line)'},
-        h('button', {class: 'btn primary', onclick: () => act('/api/wheel/preview', {}, {ok: 'Колесо открыто — посмотрите на экран'})}, '▶ Показать сейчас'),
-        h('span', {class: 'hint'}, 'Откроется поверх всех окон: щёлкните по звуку или нажмите 1–8.'))] : null);
+        h('button', {class: 'btn primary', onclick: () => act('/api/wheel/preview', {}, {ok: _t('Колесо открыто — посмотрите на экран')})}, _t('▶ Показать сейчас')),
+        h('span', {class: 'hint'}, _t('Откроется поверх всех окон: щёлкните по звуку или нажмите 1–8.')))] : null);
   const left = [top, howCard(wh)];
   if (w.enabled) {
-    left.push(hint(['🖥️ Колесо видно поверх игр в режиме экрана ', h('b', {}, '«Оконный без рамки»'),
-      ' (в Dota 2: Настройки → Видео → «Окно без рамки»). В эксклюзивном полноэкранном режиме Windows не даёт рисовать поверх игры.'], 'accent'));
+    left.push(hint([_t('🖥️ Колесо видно поверх игр в режиме экрана '), h('b', {}, _t('«Оконный без рамки»')),
+      _t(' (в Dota 2: Настройки → Видео → «Окно без рамки»). В эксклюзивном полноэкранном режиме Windows не даёт рисовать поверх игры.')], 'accent'));
     left.push(slotsCard(w, wh), lookCard(w));
   }
   return h('div', {class: 'grid2', style: 'grid-template-columns:minmax(380px,1fr) minmax(400px,1fr)'},
@@ -42,21 +43,21 @@ export default function wheelPage() {
 }
 
 function bindWheelKey() {
-  return bindKey('wheel', {title: 'Клавиша колеса звуков',
-    hint: 'Её держат, пока выбирают звук. Возьмите клавишу, которой в игре ничего не назначено (например, бывшую клавишу колеса чата), или боковую кнопку мыши.'});
+  return bindKey('wheel', {title: _t('Клавиша колеса звуков'),
+    hint: _t('Её держат, пока выбирают звук. Возьмите клавишу, которой в игре ничего не назначено (например, бывшую клавишу колеса чата), или боковую кнопку мыши.')});
 }
 
 // ---------- как пользоваться ----------
 function howCard(wh) {
-  const k = wh.key ? kbd(wh.key) : h('b', {}, 'клавишу');
+  const k = wh.key ? kbd(wh.key) : h('b', {}, _t('клавишу'));
   const step = (n, title, text) => h('div', {class: 'wh-step'}, h('span', {class: 'wh-n'}, n), h('div', {}, h('b', {}, title), h('span', {class: 'dim'}, ' — ' + text)));
-  return h('div', {class: 'card'}, h('h3', {}, '🎮 Как пользоваться'),
+  return h('div', {class: 'card'}, h('h3', {}, _t('🎮 Как пользоваться')),
     h('div', {class: 'wh-steps'},
-      step(1, ['Зажмите ', k], 'колесо появится вокруг курсора.'),
-      step(2, 'Ведите мышь к звуку', 'сектор подсветится. Далеко вести не нужно.'),
-      step(3, 'Отпустите', 'звук прозвучит. Не сдвинули мышь — ничего не случится.')),
-    h('p', {class: 'hint', style: 'margin:12px 0 0'}, 'Нажали коротко — колесо останется на экране: щёлкните по сектору или нажмите цифру 1–8. ',
-      'Esc или правая кнопка мыши — закрыть.'));
+      step(1, [_t('Зажмите '), k], _t('колесо появится вокруг курсора.')),
+      step(2, _t('Ведите мышь к звуку'), _t('сектор подсветится. Далеко вести не нужно.')),
+      step(3, _t('Отпустите'), _t('звук прозвучит. Не сдвинули мышь — ничего не случится.'))),
+    h('p', {class: 'hint', style: 'margin:12px 0 0'}, _t('Нажали коротко — колесо останется на экране: щёлкните по сектору или нажмите цифру 1–8. '),
+      _t('Esc или правая кнопка мыши — закрыть.')));
 }
 
 // ---------- секторы ----------
@@ -81,28 +82,28 @@ function swapSlots(i, j) {
   const w = wcfg(), items = manualItems(w);
   [items[i], items[j]] = [items[j], items[i]];
   w.items = items;
-  save(w, {ok: 'Поменялись местами: ' + (i + 1) + ' ⇄ ' + (j + 1)});
+  save(w, {ok: _t('Поменялись местами: ') + (i + 1) + ' ⇄ ' + (j + 1)});
 }
 function slotsCard(w, wh) {
   const items = wh.items || [];
-  const rows = wh.auto ? [] : items.map((it, i) => h('div', {class: 'pick wh-row', title: 'Изменить сектор ' + (i + 1), onclick: () => pickSlot(i)},
+  const rows = wh.auto ? [] : items.map((it, i) => h('div', {class: 'pick wh-row', title: _t('Изменить сектор ') + (i + 1), onclick: () => pickSlot(i)},
     h('span', {class: 'num'}, i + 1), h('span', {class: 'wh-arrow', title: DIRS[i]}, ARROWS[i]),
     it.act && !it.missing ? [h('span', {class: 'pe'}, it.emoji || '🔊'), h('span', {class: 'ell grow'}, it.label)]
-      : it.missing ? [h('span', {class: 'pe'}, '⚠️'), h('span', {class: 'ell grow warn'}, it.label + ' — удалён или спрятан')]
-        : [h('span', {class: 'pe faint'}, '·'), h('span', {class: 'ell grow faint'}, 'пусто')],
-    it.act ? h('button', {class: 'btn sm icon ghost', title: 'Очистить сектор', onclick: e => { e.stopPropagation(); setSlot(i, ''); }}, icon('x', 14))
-      : h('span', {class: 'wh-add'}, '＋ выбрать')));
+      : it.missing ? [h('span', {class: 'pe'}, '⚠️'), h('span', {class: 'ell grow warn'}, it.label + _t(' — удалён или спрятан'))]
+        : [h('span', {class: 'pe faint'}, '·'), h('span', {class: 'ell grow faint'}, _t('пусто'))],
+    it.act ? h('button', {class: 'btn sm icon ghost', title: _t('Очистить сектор'), onclick: e => { e.stopPropagation(); setSlot(i, ''); }}, icon('x', 14))
+      : h('span', {class: 'wh-add'}, _t('＋ выбрать'))));
   return h('div', {class: 'card'},
-    wh.auto ? setNote('в колесе первые 8 его звуков.') : null,
-    h('div', {class: 'card-h'}, h('h3', {}, '🎯 Секторы'), h('div', {class: 'grow'}),
-      seg([['auto', 'Первые 8 с панели'], ['manual', 'Свой набор']], wh.auto ? 'auto' : 'manual', v => {
+    wh.auto ? setNote(_t('в колесе первые 8 его звуков.')) : null,
+    h('div', {class: 'card-h'}, h('h3', {}, _t('🎯 Секторы')), h('div', {class: 'grow'}),
+      seg([['auto', _t('Первые 8 с панели')], ['manual', _t('Свой набор')]], wh.auto ? 'auto' : 'manual', v => {
         const x = wcfg();
         x.items = v === 'auto' ? [] : manualItems(x);
-        save(x, {ok: v === 'auto' ? 'В колесе — первые 8 плиток со страницы «Звуки»' : 'Теперь можно выбрать, что в каждом секторе'});
+        save(x, {ok: v === 'auto' ? _t('В колесе — первые 8 плиток со страницы «Звуки»') : _t('Теперь можно выбрать, что в каждом секторе')});
       })),
-    wh.auto ? h('p', {class: 'hint', style: 'margin:0'}, 'По часовой стрелке от верхнего — первые 8 плиток со страницы «Звуки» (их порядок меняется там перетаскиванием). ',
-      'Чтобы выбрать звуки самому, щёлкните по сектору на колесе или переключите на «Свой набор».') :
-      [h('p', {class: 'hint', style: 'margin:0 0 10px'}, 'В секторе может быть звук, эффект голоса, «Стоп» или кнопка микрофона. Порядок — перетаскиванием секторов на колесе.'),
+    wh.auto ? h('p', {class: 'hint', style: 'margin:0'}, _t('По часовой стрелке от верхнего — первые 8 плиток со страницы «Звуки» (их порядок меняется там перетаскиванием). '),
+      _t('Чтобы выбрать звуки самому, щёлкните по сектору на колесе или переключите на «Свой набор».')) :
+      [h('p', {class: 'hint', style: 'margin:0 0 10px'}, _t('В секторе может быть звук, эффект голоса, «Стоп», кнопка микрофона или «Читалки». Порядок — перетаскиванием секторов на колесе.')),
         h('div', {class: 'pick-list', style: 'max-height:none'}, rows)]);
 }
 
@@ -119,42 +120,45 @@ function pickSlot(i) {
     if (!first) first = a;
     return h('div', {class: 'pick' + (a === cur ? ' on' : ''), onclick: () => choose(a)},
       h('span', {class: 'pe'}, emoji), h('span', {class: 'ell grow'}, title, sub ? h('span', {class: 'faint'}, ' · ' + sub) : null),
-      k != null && k !== i ? h('span', {class: 'badge dim', title: 'Уже в секторе ' + (k + 1) + ' — сектора поменяются местами'}, ARROWS[k] + ' ' + (k + 1)) : null,
-      a === cur ? h('span', {class: 'badge'}, 'сейчас') : null);
+      k != null && k !== i ? h('span', {class: 'badge dim', title: _t('Уже в секторе ') + (k + 1) + _t(' — сектора поменяются местами')}, ARROWS[k] + ' ' + (k + 1)) : null,
+      a === cur ? h('span', {class: 'badge'}, _t('сейчас')) : null);
   };
   const list = h('div', {class: 'pick-list', style: 'max-height:min(52vh,440px)'});
   const fill = () => {
     first = null;
     const m = t => !q || String(t).toLowerCase().includes(q);
     const snd = pad.filter(s => m(s.title)), fx = presets.filter(p => m(p.title));
-    const btn = [['stop', '⏹️', 'Стоп', 'остановить все звуки'], ['mic_mute', '🎙️', 'Микрофон', 'выключить / включить']].filter(b => m(b[2]) || m(b[3]));
+    const btn = [['stop', '⏹️', _t('Стоп'), _t('остановить все звуки')], ['mic_mute', '🎙️', _t('Микрофон'), _t('выключить / включить')],
+      ['reader', '🎭', _t('Читалка'), _t('набрать текст — прочитает голос персонажа')], ['reader:repeat', '🔁', _t('Повторить фразу'), _t('последнюю из «Читалки»')],
+      ['reader:next', '😏', _t('Голос читалки'), _t('следующий персонаж')], ['reader:stop', '🤐', _t('Замолчать'), _t('оборвать «Читалку» и чат')],
+      ['chat_read', '💬', _t('Чтение чата'), _t('Dota 2: вкл / выкл')]].filter(b => m(b[2]) || m(b[3]));
     list.replaceChildren(...[
-      snd.length ? [h('div', {class: 'flabel wh-lab'}, 'Звуки'), snd.map(s => row('sound:' + s.id, s.emoji || '🔊', s.title, s.hotkey ? keyLabel(s.hotkey) : ''))] : null,
-      fx.length ? [h('div', {class: 'flabel wh-lab'}, 'Эффекты голоса'), fx.map(p => row('preset:' + p.id, p.emoji || '🎛️', p.title))] : null,
-      btn.length ? [h('div', {class: 'flabel wh-lab'}, 'Кнопки'), btn.map(b => row(b[0], b[1], b[2], b[3]))] : null,
-      !snd.length && !fx.length && !btn.length ? h('p', {class: 'hint', style: 'text-align:center;margin:18px 0'}, 'Ничего не нашлось') : null,
+      snd.length ? [h('div', {class: 'flabel wh-lab'}, _t('Звуки')), snd.map(s => row('sound:' + s.id, s.emoji || '🔊', s.title, s.hotkey ? keyLabel(s.hotkey) : ''))] : null,
+      fx.length ? [h('div', {class: 'flabel wh-lab'}, _t('Эффекты голоса')), fx.map(p => row('preset:' + p.id, p.emoji || '🎛️', p.title))] : null,
+      btn.length ? [h('div', {class: 'flabel wh-lab'}, _t('Кнопки')), btn.map(b => row(b[0], b[1], b[2], b[3]))] : null,
+      !snd.length && !fx.length && !btn.length ? h('p', {class: 'hint', style: 'text-align:center;margin:18px 0'}, _t('Ничего не нашлось')) : null,
     ].flat(3).filter(Boolean));
   };
-  const inp = h('input', {class: 'input', placeholder: 'Найти звук или эффект…', autofocus: true,
+  const inp = h('input', {class: 'input', placeholder: _t('Найти звук или эффект…'), autofocus: true,
     oninput: () => { q = inp.value.trim().toLowerCase(); fill(); },
     onkeydown: e => { if (e.key === 'Enter' && first) choose(first); }});
   fill();
-  const d = dialog({title: 'Сектор ' + (i + 1) + ' · ' + ARROWS[i] + ' ' + DIRS[i],
+  const d = dialog({title: _t('Сектор ') + (i + 1) + ' · ' + ARROWS[i] + ' ' + DIRS[i],
     body: [inp, h('div', {style: 'height:10px'}), list],
-    foot: [cur ? h('button', {class: 'btn ghost', onclick: () => choose('')}, 'Очистить сектор') : null, h('div', {class: 'grow'}),
-      h('button', {class: 'btn', onclick: () => d.close()}, 'Отмена')]});
+    foot: [cur ? h('button', {class: 'btn ghost', onclick: () => choose('')}, _t('Очистить сектор')) : null, h('div', {class: 'grow'}),
+      h('button', {class: 'btn', onclick: () => d.close()}, _t('Отмена'))]});
 }
 
 // ---------- вид ----------
 function lookCard(w) {
-  return h('div', {class: 'card'}, h('h3', {}, '🎨 Вид'),
-    h('div', {}, setrow('Где появляется', w.center === 'screen' ? 'Всегда посередине экрана — направление считается от курсора' : 'Вокруг курсора мыши, как в Dota 2',
-      seg([['cursor', '🖱 У курсора'], ['screen', '🖥️ По центру экрана']], w.center || 'cursor', v => { w.center = v; save(w); }))),
+  return h('div', {class: 'card'}, h('h3', {}, _t('🎨 Вид')),
+    h('div', {}, setrow(_t('Где появляется'), w.center === 'screen' ? _t('Всегда посередине экрана — направление считается от курсора') : _t('Вокруг курсора мыши, как в Dota 2'),
+      seg([['cursor', _t('🖱 У курсора')], ['screen', _t('🖥️ По центру экрана')]], w.center || 'cursor', v => { w.center = v; save(w); }))),
     h('div', {class: 'grid2', style: 'grid-template-columns:1fr 1fr;gap:12px 24px;margin-top:10px'},
-      slider({label: 'Размер', value: w.scale || 1, min: 0.7, max: 1.6, step: 0.05, fmt: v => Math.round(v * 100) + '%',
+      slider({label: _t('Размер'), value: w.scale || 1, min: 0.7, max: 1.6, step: 0.05, fmt: v => Math.round(v * 100) + '%',
         onInput: v => { w.scale = v; live(w); }, onChange: v => { w.scale = v; save(w, {render: false}); }}),
-      slider({label: 'Прозрачность', value: Math.round((1 - (w.opacity || 0.92)) * 100) / 100, min: 0, max: 0.7, step: 0.02, fmt: v => Math.round(v * 100) + '%',
-        title: 'Насколько сквозь секторы видно игру. Значки и надписи остаются чёткими.',
+      slider({label: _t('Прозрачность'), value: Math.round((1 - (w.opacity || 0.92)) * 100) / 100, min: 0, max: 0.7, step: 0.02, fmt: v => Math.round(v * 100) + '%',
+        title: _t('Насколько сквозь секторы видно игру. Значки и надписи остаются чёткими.'),
         onInput: v => { w.opacity = 1 - v; live(w); }, onChange: v => { w.opacity = Math.round((1 - v) * 100) / 100; save(w, {render: false}); }})));
 }
 function live(w) {
@@ -260,10 +264,10 @@ function centerText(svg, it, sticky) {
   const g = svg.querySelector('.wh-c'), ptr = svg.querySelector('.wh-ptr');
   let lines, hintText = '', cls = 'ct';
   if (it) {
-    lines = it.act && !it.missing ? wrap2(it.label, 92) : ['Пусто'];
-    hintText = it.act && !it.missing ? 'изменить' : 'выбрать звук';
+    lines = it.act && !it.missing ? wrap2(it.label, 92) : [_t('Пусто')];
+    hintText = it.act && !it.missing ? _t('изменить') : _t('выбрать звук');
   } else {
-    lines = ['Ведите мышь', 'к звуку'];
+    lines = [_t('Ведите мышь'), _t('к звуку')];
     cls = 'ct idle';
   }
   const lh = 17, total = lines.length * lh + (hintText ? 15 : 0);
@@ -337,8 +341,8 @@ function previewCard(w, wh) {
   };
   requestAnimationFrame(() => { fit(); if (window.ResizeObserver) new ResizeObserver(fit).observe(wrapEl); });
   return h('div', {class: 'card', id: 'whPrev'},
-    h('div', {class: 'card-h'}, h('h3', {}, 'Так выглядит в игре'), h('div', {class: 'grow'}), wh.key ? kbd(wh.key) : null),
+    h('div', {class: 'card-h'}, h('h3', {}, _t('Так выглядит в игре')), h('div', {class: 'grow'}), wh.key ? kbd(wh.key) : null),
     wrapEl,
-    h('p', {class: 'hint', style: 'margin:10px 0 0'}, '🖱 Щёлкните по сектору — выберите, что в нём. Перетащите сектор на другой — поменяются местами.',
-      sc > 1.25 ? ' В игре колесо крупнее, чем здесь.' : ''));
+    h('p', {class: 'hint', style: 'margin:10px 0 0'}, _t('🖱 Щёлкните по сектору — выберите, что в нём. Перетащите сектор на другой — поменяются местами.'),
+      sc > 1.25 ? _t(' В игре колесо крупнее, чем здесь.') : ''));
 }

@@ -14,6 +14,7 @@ import (
 	"unicode/utf8"
 	"unsafe"
 
+	"github.com/qwkejkqwje1/dota-voicebox/internal/i18n"
 	"github.com/qwkejkqwje1/dota-voicebox/internal/overlay"
 )
 
@@ -154,6 +155,7 @@ const (
 	wmShellWheel   = wmApp + 0x2A // открыть колесо (wParam — клавиша, которую держат)
 	wmShellWSync   = wmApp + 0x2B // колесо: перерисовать или спрятать
 	wmShellSay     = wmApp + 0x2C // меню сразу в режиме набора текста
+	wmShellReader  = wmApp + 0x2D // меню в режиме «Читалки»
 	wmTray         = wmApp + 0x30
 
 	timerRefresh = 1
@@ -346,10 +348,10 @@ func (s *Shell) loop() {
 		return
 	}
 	s.hwnd = s.create(wsExToolwindow, cls, "VoiceBox")
-	s.menuW = s.create(wsExLayered|wsExTopmost|wsExToolwindow|wsExNoActivate, cls, "VoiceBox — быстрое меню")
-	s.toastW = s.create(wsExLayered|wsExTopmost|wsExToolwindow|wsExNoActivate|wsExTransparent, cls, "VoiceBox — уведомление")
+	s.menuW = s.create(wsExLayered|wsExTopmost|wsExToolwindow|wsExNoActivate, cls, "VoiceBox — "+i18n.T("быстрое меню"))
+	s.toastW = s.create(wsExLayered|wsExTopmost|wsExToolwindow|wsExNoActivate|wsExTransparent, cls, "VoiceBox — "+i18n.T("уведомление"))
 	// колесо пропускает мышь насквозь: курсор опрашиваем сами, щелчки ловит перехватчик
-	s.wheelW = s.create(wsExLayered|wsExTopmost|wsExToolwindow|wsExNoActivate|wsExTransparent, cls, "VoiceBox — колесо звуков")
+	s.wheelW = s.create(wsExLayered|wsExTopmost|wsExToolwindow|wsExNoActivate|wsExTransparent, cls, "VoiceBox — "+i18n.T("колесо звуков"))
 	if s.hwnd == 0 || s.menuW == 0 || s.toastW == 0 || s.wheelW == 0 {
 		s.ready <- syscall.GetLastError()
 		return
@@ -501,6 +503,8 @@ func (s *Shell) handle(hwnd uintptr, m uint32, wp, lp uintptr) (uintptr, bool) {
 		s.syncWheel()
 	case wmShellSay:
 		s.openSay()
+	case wmShellReader:
+		s.openReader()
 	case wmShellRefresh:
 		s.refresh()
 	case wmShellToast:
@@ -1383,6 +1387,27 @@ func (s *Shell) openSay() {
 	}
 	if c.Visible() {
 		c.StartTyping()
+		s.drawMenu()
+	}
+}
+
+// OpenReader — меню в режиме «Читалки»: набранный текст прочитает голос персонажа.
+func (s *Shell) OpenReader() {
+	if s != nil {
+		s.post(wmShellReader)
+	}
+}
+
+func (s *Shell) openReader() {
+	c := s.o.Menu
+	if c == nil {
+		return
+	}
+	if !c.Visible() {
+		s.openMenu(false)
+	}
+	if c.Visible() {
+		c.StartReader()
 		s.drawMenu()
 	}
 }

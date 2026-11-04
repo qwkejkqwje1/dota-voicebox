@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/qwkejkqwje1/dota-voicebox/internal/i18n"
 )
 
 func sampleView(scale float64) MenuView {
@@ -26,6 +28,14 @@ func sampleView(scale float64) MenuView {
 			{Key: "0", Emoji: "🔫", Label: "Пиу-пиу", Color: "#22d3ee"},
 		},
 	}
+}
+
+// OVERLAY_LANG=en — картинки (OVERLAY_PNG) с английским интерфейсом.
+func TestMain(m *testing.M) {
+	if os.Getenv("OVERLAY_LANG") == "en" {
+		i18n.SetLang("en")
+	}
+	os.Exit(m.Run())
 }
 
 func save(t *testing.T, name string, img image.Image) {

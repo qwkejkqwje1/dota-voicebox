@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"path"
+	"slices"
 	"strings"
 	"time"
 
@@ -22,6 +23,7 @@ import (
 	"github.com/qwkejkqwje1/dota-voicebox/internal/config"
 	"github.com/qwkejkqwje1/dota-voicebox/internal/dsp"
 	"github.com/qwkejkqwje1/dota-voicebox/internal/gsi"
+	"github.com/qwkejkqwje1/dota-voicebox/internal/i18n"
 	"github.com/qwkejkqwje1/dota-voicebox/internal/logbus"
 	"github.com/qwkejkqwje1/dota-voicebox/internal/overlay"
 	"github.com/qwkejkqwje1/dota-voicebox/internal/script"
@@ -98,6 +100,7 @@ func (s *Server) Serve(l net.Listener) error {
 		"POST /api/setup/auto":      s.autoSetup,
 		"POST /api/setup/fix":       s.fix,
 		"POST /api/setup/autostart": s.autostart,
+		"POST /api/setup/shortcut":  s.shortcut,
 		"POST /api/hotkeys/pause":   s.pauseHotkeys,
 		"POST /api/open":            s.open,
 		"POST /api/quit":            s.quit,
@@ -109,6 +112,7 @@ func (s *Server) Serve(l net.Listener) error {
 		"POST /api/scripts/run":     s.scriptRun,
 		"POST /api/scripts/enable":  s.scriptEnable,
 		"POST /api/scripts/check":   s.scriptCheck,
+		"POST /api/scripts/example": s.scriptExample,
 		"POST /api/test":            s.runTest,
 		"POST /api/clock":           s.setClock,
 		"GET /api/update":           func(*http.Request) (any, error) { return s.Updater.Status(), nil },
@@ -139,15 +143,34 @@ func (s *Server) Serve(l net.Listener) error {
 			w.Header().Set("Content-Type", "application/json")
 			if err != nil {
 				w.WriteHeader(http.StatusBadRequest)
-				json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+				json.NewEncoder(w).Encode(map[string]string{"error": i18n.T(err.Error())})
 				return
 			}
 			if res == nil {
 				res = map[string]bool{"ok": true}
 			}
-			json.NewEncoder(w).Encode(res)
+			b, err := i18n.JSON(res) // английский интерфейс — строки программы по-английски
+			if err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+				return
+			}
+			w.Write(append(b, '\n'))
 		})
 	}
+	// словарь для интерфейса (без перевода самого ответа)
+	mux.HandleFunc("GET /api/i18n", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Token") != s.Token {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		res := map[string]any{"lang": i18n.Lang()}
+		if i18n.En() {
+			res["dict"] = i18n.Dict()
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(res)
+	})
 	mux.HandleFunc("GET /api/events", s.events)
 	mux.HandleFunc("GET /api/viz", s.viz)
 	srv := &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second}
@@ -189,6 +212,9 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 	defer tick.Stop()
 	send := func(ev string, v any) {
 		b, _ := json.Marshal(v)
+		if ev == "status" {
+			b = i18n.TranslateJSON(b)
+		}
 		fmt.Fprintf(w, "event: %s\ndata: %s\n\n", ev, b)
 	}
 	n := 0
@@ -197,7 +223,7 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 		case <-r.Context().Done():
 			return
 		case line := <-logs:
-			send("log", line)
+			send("log", i18n.Line(line))
 			fl.Flush()
 		case <-tick.C:
 			lv := s.Engine.Levels()
@@ -266,6 +292,17 @@ func (s *Server) autostart(r *http.Request) (any, error) {
 		return nil, err
 	}
 	return nil, winapi.SetAutostart(req.On)
+}
+
+func (s *Server) shortcut(r *http.Request) (any, error) {
+	var req struct {
+		Where string `json:"where"` // start | desktop
+		On    bool   `json:"on"`
+	}
+	if err := decode(r, &req); err != nil {
+		return nil, err
+	}
+	return nil, winapi.SetShortcut(req.Where, req.On)
 }
 
 func (s *Server) pauseHotkeys(r *http.Request) (any, error) {
@@ -374,6 +411,29 @@ func (s *Server) scriptSave(r *http.Request) (any, error) {
 		m.Sync(s.App.Config().Scripts)
 	}
 	return map[string]any{"compile": ci(cerr), "scripts": m.List()}, nil
+}
+
+// scriptExample — встроенный пример в папку скриптов (если такого скрипта ещё нет; свой не перезаписывается).
+func (s *Server) scriptExample(r *http.Request) (any, error) {
+	var req struct {
+		Name string `json:"name"`
+	}
+	if err := decode(r, &req); err != nil {
+		return nil, err
+	}
+	code, ok := script.Example(req.Name)
+	if !ok {
+		return nil, fmt.Errorf("нет примера %q", req.Name)
+	}
+	m := s.App.Scripts()
+	exists := slices.Contains(m.Names(), req.Name)
+	if !exists {
+		if _, err := m.Save(req.Name, code); err != nil {
+			return nil, err
+		}
+		m.Sync(s.App.Config().Scripts)
+	}
+	return map[string]any{"exists": exists, "scripts": m.List()}, nil
 }
 
 func (s *Server) setEnabled(name string, on bool) error {

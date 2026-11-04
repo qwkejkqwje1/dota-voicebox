@@ -13,12 +13,14 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/qwkejkqwje1/dota-voicebox/internal/app"
 	"github.com/qwkejkqwje1/dota-voicebox/internal/audio"
 	"github.com/qwkejkqwje1/dota-voicebox/internal/combo"
 	"github.com/qwkejkqwje1/dota-voicebox/internal/config"
+	"github.com/qwkejkqwje1/dota-voicebox/internal/i18n"
 	"github.com/qwkejkqwje1/dota-voicebox/internal/keys"
 	"github.com/qwkejkqwje1/dota-voicebox/internal/logbus"
 	"github.com/qwkejkqwje1/dota-voicebox/internal/overlay"
@@ -73,7 +75,9 @@ func main() {
 
 	abs, _ := filepath.Abs(*cfgPath)
 	base := filepath.Dir(abs)
-	if _, err := config.EnsureFile(abs); err != nil {
+	sysLang := i18n.Detect(winapi.UILanguage())
+	i18n.SetLang(sysLang)
+	if _, err := config.EnsureFile(abs, sysLang); err != nil {
 		fatal("Не удалось создать config.json: %v", err)
 	}
 	os.MkdirAll(filepath.Join(base, "sounds"), 0o755)
@@ -81,6 +85,7 @@ func main() {
 	if err != nil {
 		fatal("Ошибка в config.json: %v", err)
 	}
+	i18n.SetLang(app.UILang(cfg))
 	port := cfg.UI.Port
 	if port == 0 {
 		port = 3001
@@ -136,6 +141,11 @@ func main() {
 	log.SetOutput(io.MultiWriter(writers...))
 	log.Printf("VoiceBox %s запущен", version)
 	winapi.SetHighPriority()
+	go func() {
+		if fixed := winapi.HealShortcuts(); len(fixed) > 0 {
+			log.Printf("Программа переехала в другую папку — обновлены: %s", strings.Join(fixed, ", "))
+		}
+	}()
 
 	eng := audio.NewEngine()
 	a := app.New(abs, eng)
@@ -186,6 +196,7 @@ func main() {
 	if shell != nil {
 		a.OnWheel = shell.OpenWheel
 		a.OnSay = shell.OpenSay
+		a.OnReader = shell.OpenReader
 	}
 	a.OnToast = func(t app.Toast) { shell.Toast(overlay.ToastView{Emoji: t.Emoji, Text: t.Text, Sub: t.Sub}) }
 	remote := &ui.Remote{App: a} // пульт с телефона (свой сервер в домашней сети, если включён)
@@ -254,6 +265,7 @@ func main() {
 	}
 	defer func() {
 		eng.Close()
+		winapi.CloseTTS() // фоновый PowerShell синтеза речи
 		log.Print("Выход")
 	}()
 	for {
@@ -279,11 +291,11 @@ func main() {
 			}
 			log.Print("Окно закрыто — VoiceBox работает в фоне (значок в трее)")
 			if !c.UI.TrayHintShown {
-				hint := "Значок — в области уведомлений рядом с часами."
+				hint := i18n.T("Значок — в области уведомлений рядом с часами.")
 				if k := keys.Display(a.HotkeyMap()["menu"]); k != "" {
-					hint += " Быстрое меню в игре: " + k
+					hint += " " + fmt.Sprintf(i18n.T("Быстрое меню в игре: %s"), k)
 				}
-				shell.Balloon("VoiceBox работает в фоне", hint)
+				shell.Balloon(i18n.T("VoiceBox работает в фоне"), hint)
 				a.UpdateConfig(func(c *config.Config) { c.UI.TrayHintShown = true })
 			}
 		}
@@ -334,6 +346,6 @@ func pingExisting(addr string) bool {
 func fatal(f string, args ...any) {
 	msg := fmt.Sprintf(f, args...)
 	log.Print(msg)
-	winapi.Alert("VoiceBox", msg)
+	winapi.Alert("VoiceBox", i18n.T(msg))
 	os.Exit(1)
 }

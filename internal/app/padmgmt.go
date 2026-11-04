@@ -10,6 +10,7 @@ import (
 	"unicode"
 
 	"github.com/qwkejkqwje1/dota-voicebox/internal/config"
+	"github.com/qwkejkqwje1/dota-voicebox/internal/i18n"
 	"github.com/qwkejkqwje1/dota-voicebox/internal/keys"
 	"github.com/qwkejkqwje1/dota-voicebox/internal/sounds"
 )
@@ -33,6 +34,9 @@ func Visible(s *sounds.Sound) bool {
 // DisplayLabel — название плитки: подпись или имя файла.
 func DisplayLabel(s *sounds.Sound) string {
 	if s.Label != "" {
+		if s.Source == "builtin" { // встроенный звук без описания в конфиге — подпись на языке интерфейса
+			return i18n.T(s.Label)
+		}
 		return s.Label
 	}
 	l := strings.NewReplacer("_", " ", "-", " ").Replace(s.ID)
@@ -168,7 +172,7 @@ func (a *App) importSound(name string, data []byte, ext, emoji string) (string, 
 	}
 	name = strings.TrimSuffix(strings.TrimSpace(name), filepath.Ext(name))
 	if name == "" {
-		name = "Звук"
+		name = i18n.T("Звук")
 	}
 	cfg := a.Config()
 	id := a.uniqueID(cfg, Slug(name))
@@ -229,7 +233,7 @@ func (a *App) AddBuiltin(name string) (string, error) {
 	}
 	cfg := a.Config()
 	id := a.uniqueID(cfg, name)
-	return id, a.addDef(id, sounds.Def{Files: []string{"builtin:" + name}, Label: info.Label, Emoji: info.Emoji,
+	return id, a.addDef(id, sounds.Def{Files: []string{"builtin:" + name}, Label: i18n.T(info.Label), Emoji: info.Emoji,
 		Color: colorFor(id), Mode: sounds.ModeToggle})
 }
 

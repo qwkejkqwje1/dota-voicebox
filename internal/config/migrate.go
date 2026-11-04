@@ -37,8 +37,24 @@ func migrate(c *Config, probe map[string]json.RawMessage) {
 	if c.Version < 4 {
 		migrateV4(c)
 	}
+	if c.Version < 5 {
+		// v4 → v5: «Читалка» — своя клавиша, если она свободна и у читалки ещё нет клавиши
+		if c.Hotkeys == nil {
+			c.Hotkeys = map[string]string{}
+		}
+		if !HasAction(c.Hotkeys, "reader") && FreeKey(c.Hotkeys, ReaderKey) {
+			c.Hotkeys[ReaderKey] = "reader"
+		}
+		// язык интерфейса: старые конфиги — по-русски, как и было
+		if _, ok := probe["ui_lang"]; !ok {
+			c.UILang = "ru"
+		}
+	}
 	c.Version = Version
 }
+
+// ReaderKey — клавиша «Читалки» по умолчанию.
+const ReaderKey = "Ctrl+Alt+R"
 
 // SupportRunes — напоминание саппортам за 40 секунд до рун силы на 6:00 (слышит команда).
 var SupportRunes = Reminder{ID: "support_runes", Label: "Саппорты к рунам", Enabled: true, At: []int{360}, Before: 40, To: "both",
@@ -268,6 +284,8 @@ func (c *Config) Fix() {
 	q.Items = dedupe(q.Items)
 	q.Effects = dedupe(q.Effects)
 	c.fixWheel()
+	c.fixReader()
+	c.fixLang()
 	c.fixRemote()
 	c.fixVoice()
 	c.fixSets()
@@ -383,6 +401,43 @@ func (c *Config) fixWheel() {
 	for len(w.Items) < WheelSlots { // свой набор: всегда ровно 8 мест, пустые сектора остаются на своих местах
 		w.Items = append(w.Items, "")
 	}
+}
+
+func busTo(s, def string) string {
+	switch s {
+	case "both", "voice", "monitor":
+		return s
+	}
+	return def
+}
+
+func (c *Config) fixLang() {
+	switch c.UILang = strings.ToLower(strings.TrimSpace(c.UILang)); c.UILang {
+	case "ru", "en", "":
+	default:
+		c.UILang = ""
+	}
+}
+
+func (c *Config) fixReader() {
+	r := &c.Reader
+	r.Voice = strings.TrimSpace(r.Voice)
+	if r.Voice == "" {
+		r.Voice = "sly"
+	}
+	r.To = busTo(r.To, "both")
+	r.Rate = max(-5, min(5, r.Rate))
+	if r.Volume <= 0 {
+		r.Volume = 1
+	}
+	r.Volume = clamp(r.Volume, 0.1, 2)
+	ch := &r.Chat
+	ch.Voice = strings.TrimSpace(ch.Voice)
+	ch.To = busTo(ch.To, "monitor")
+	if ch.MaxLen <= 0 {
+		ch.MaxLen = 120
+	}
+	ch.MaxLen = max(20, min(300, ch.MaxLen))
 }
 
 // RemoteKeyChars — алфавит ключа пульта: без похожих символов (0/o, 1/l/i), чтобы адрес легко перепечатать.

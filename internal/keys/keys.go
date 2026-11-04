@@ -4,6 +4,8 @@ package keys
 import (
 	"fmt"
 	"strings"
+
+	"github.com/qwkejkqwje1/dota-voicebox/internal/i18n"
 )
 
 // Модификаторы в формате RegisterHotKey.
@@ -129,7 +131,7 @@ func Display(s string) string {
 		}
 		switch {
 		case display[up] != "":
-			parts[i] = display[up]
+			parts[i] = i18n.T(display[up]) // «Пробел» → «Space» в английском интерфейсе
 		case strings.HasPrefix(up, "NUM") && len(up) == 4:
 			parts[i] = "Num " + up[3:]
 		default:

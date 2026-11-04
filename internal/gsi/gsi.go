@@ -7,6 +7,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -30,6 +31,8 @@ type State struct {
 	Player *struct {
 		Name       string `json:"name"`
 		TeamName   string `json:"team_name"`
+		PlayerSlot OptInt `json:"player_slot"`
+		TeamSlot   OptInt `json:"team_slot"`
 		Kills      int    `json:"kills"`
 		Deaths     int    `json:"deaths"`
 		Assists    int    `json:"assists"`
@@ -44,14 +47,96 @@ type State struct {
 		HealthPercent int    `json:"health_percent"`
 		Smoked        bool   `json:"smoked"`
 	} `json:"hero"`
-	// Events — провайдер "events" (roshan_killed, aegis_picked_up, bounty_rune_pickup…).
-	Events []Event `json:"events"`
+	// Events — провайдер "events" (roshan_killed, aegis_picked_up, bounty_rune_pickup, chat_message…).
+	// В каждом пакете — снова последние события матча (обычно от старых к новым).
+	Events Events `json:"events"`
 }
 
+// Event — событие провайдера "events". Разбирается терпимо: незнакомое событие не ломает весь пакет.
 type Event struct {
-	GameTime  int    `json:"game_time"`
-	EventType string `json:"event_type"`
-	Team      string `json:"killed_by_team,omitempty"`
+	GameTime  float64
+	EventType string
+	Team      string // killed_by_team (roshan_killed)
+
+	// chat_message — сообщение в чате
+	PlayerID    int    // кто написал (0–9), -1 — неизвестно
+	ChannelType int    // ChatAll — общий чат, ChatTeam — союзники
+	Message     string // текст
+}
+
+// Каналы чата Dota 2 (channel_type в chat_message).
+const (
+	ChatAll  = 11
+	ChatTeam = 12
+)
+
+// EvChat — тип события «сообщение в чате».
+const EvChat = "chat_message"
+
+func (e *Event) UnmarshalJSON(b []byte) error {
+	var m map[string]any
+	*e = Event{PlayerID: -1}
+	if json.Unmarshal(b, &m) != nil {
+		return nil
+	}
+	e.GameTime, _ = num(m["game_time"])
+	e.EventType, _ = m["event_type"].(string)
+	e.Team, _ = m["killed_by_team"].(string)
+	if v, ok := num(m["player_id"]); ok {
+		e.PlayerID = int(v)
+	}
+	if v, ok := num(m["channel_type"]); ok {
+		e.ChannelType = int(v)
+	}
+	e.Message, _ = m["message"].(string)
+	return nil
+}
+
+// Events — список событий; не список (или битый) — пусто, а не ошибка всего пакета.
+type Events []Event
+
+func (l *Events) UnmarshalJSON(b []byte) error {
+	var raw []json.RawMessage
+	if json.Unmarshal(b, &raw) != nil {
+		*l = nil
+		return nil
+	}
+	out := make(Events, 0, len(raw))
+	for _, r := range raw {
+		var e Event
+		e.UnmarshalJSON(r)
+		out = append(out, e)
+	}
+	*l = out
+	return nil
+}
+
+// OptInt — целое, которого может не быть (или оно пришло строкой).
+type OptInt struct {
+	V  int
+	Ok bool
+}
+
+func (o *OptInt) UnmarshalJSON(b []byte) error {
+	var v any
+	*o = OptInt{}
+	if json.Unmarshal(b, &v) == nil {
+		if f, ok := num(v); ok {
+			*o = OptInt{V: int(f), Ok: true}
+		}
+	}
+	return nil
+}
+
+func num(v any) (float64, bool) {
+	switch x := v.(type) {
+	case float64:
+		return x, true
+	case string:
+		f, err := strconv.ParseFloat(strings.TrimSpace(x), 64)
+		return f, err == nil
+	}
+	return 0, false
 }
 
 const InProgress = "DOTA_GAMERULES_STATE_GAME_IN_PROGRESS"

@@ -15,10 +15,14 @@ type fakeSrc struct {
 	search          []Item
 	phrases         []string
 	canSay          bool
+	voices          []Item
+	voice           string
+	readHist        []string
 }
 
 func (f *fakeSrc) MenuData() Data {
-	d := Data{TimeoutSec: f.timeout, CloseAfterPick: f.closeAfter, Search: f.search, Phrases: f.phrases, CanSay: f.canSay}
+	d := Data{TimeoutSec: f.timeout, CloseAfterPick: f.closeAfter, Search: f.search, Phrases: f.phrases, CanSay: f.canSay,
+		Voices: f.voices, Voice: f.voice, ReadHist: f.readHist}
 	for i := 0; i < f.sounds; i++ {
 		d.Sounds = append(d.Sounds, Item{ID: fmt.Sprintf("s%d", i), Label: fmt.Sprintf("Звук %d", i)})
 	}

@@ -13,6 +13,7 @@ import (
 
 	"github.com/qwkejkqwje1/dota-voicebox/internal/audio"
 	"github.com/qwkejkqwje1/dota-voicebox/internal/config"
+	"github.com/qwkejkqwje1/dota-voicebox/internal/i18n"
 	"github.com/qwkejkqwje1/dota-voicebox/internal/sounds"
 	"github.com/qwkejkqwje1/dota-voicebox/internal/winapi"
 )
@@ -23,6 +24,8 @@ type Speech interface {
 	Failed(text string) error
 	Render(texts []string) error
 	Say(text string) (sounds.Clip, error)
+	// SayWith — фраза другим голосом, скоростью или языком («Читалка»).
+	SayWith(text string, o winapi.SpeakOpts) (sounds.Clip, error)
 	Voices() ([]winapi.Voice, error)
 	Retry()
 }
@@ -30,7 +33,11 @@ type Speech interface {
 // makeSpeech переиспользует синтезатор, если голос и скорость не изменились.
 func (a *App) makeSpeech(cur Speech, cfg *config.Config) Speech {
 	dir := filepath.Join(a.BaseDir, "cache")
-	if t, ok := cur.(*winapi.TTS); ok && t != nil && t.Voice == cfg.TTSVoice && t.Rate == cfg.TTSRate {
+	lang := "" // голос фраз по умолчанию — русский; в английском интерфейсе — английский
+	if i18n.En() {
+		lang = "en"
+	}
+	if t, ok := cur.(*winapi.TTS); ok && t != nil && t.Voice == cfg.TTSVoice && t.Rate == cfg.TTSRate && t.Lang == lang {
 		return cur
 	}
 	if f, ok := cur.(*fakeSpeech); ok && f.rate == cfg.TTSRate && f.voice == cfg.TTSVoice {
@@ -43,6 +50,7 @@ func (a *App) makeSpeech(cur Speech, cfg *config.Config) Speech {
 		return nil
 	}
 	if t := winapi.NewTTS(dir, cfg.TTSVoice, cfg.TTSRate); t != nil {
+		t.Lang = lang
 		return t
 	}
 	return nil
@@ -192,6 +200,19 @@ func (f *fakeSpeech) Say(text string) (sounds.Clip, error) {
 	return c, nil
 }
 
+// SayWith — мужской голос ниже, скорость меняет длину слогов.
+func (f *fakeSpeech) SayWith(text string, o winapi.SpeakOpts) (sounds.Clip, error) {
+	if strings.TrimSpace(text) == "" {
+		return nil, fmt.Errorf("пустая фраза")
+	}
+	time.Sleep(150 * time.Millisecond)
+	f0 := 150.0
+	if o.Gender == "Male" || strings.Contains(o.Voice, "Pavel") || strings.Contains(o.Voice, "David") {
+		f0 = 105
+	}
+	return fakeVoiceAt(text, f0, math.Pow(0.9, float64(o.Rate))), nil
+}
+
 func (f *fakeSpeech) Voices() ([]winapi.Voice, error) {
 	return []winapi.Voice{
 		{ID: "winrt:Microsoft Irina", Name: "Microsoft Irina", Lang: "ru-RU", Gender: "Female"},
@@ -201,13 +222,16 @@ func (f *fakeSpeech) Voices() ([]winapi.Voice, error) {
 	}, nil
 }
 
-func fakeVoice(text string) sounds.Clip {
+func fakeVoice(text string) sounds.Clip { return fakeVoiceAt(text, 150, 1) }
+
+// fakeVoiceAt — слоги с основным тоном base…base+40 Гц; slow > 1 — медленнее.
+func fakeVoiceAt(text string, base, slow float64) sounds.Clip {
 	const sr = sounds.SampleRate
 	var out sounds.Clip
 	for _, w := range strings.Fields(text) {
 		n := len([]rune(w))
-		d := 0.09 + 0.045*float64(n)
-		f0 := 150 + rand.Float64()*40
+		d := (0.09 + 0.045*float64(n)) * slow
+		f0 := base + rand.Float64()*40
 		seg := make(sounds.Clip, int(d*sr))
 		ph := 0.0
 		for i := range seg {

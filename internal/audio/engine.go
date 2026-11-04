@@ -46,6 +46,9 @@ type Status struct {
 	VoiceOut   string `json:"voice_out"`
 	Monitor    string `json:"monitor"`
 	CableFound bool   `json:"cable_found"`
+	// выбранное устройство не подключено — временно работает устройство по умолчанию
+	MicMissing     string `json:"mic_missing,omitempty"`
+	MonitorMissing string `json:"monitor_missing,omitempty"`
 }
 
 // Engine: дуплекс (микрофон → кабель) + отдельный вывод в наушники.
@@ -65,6 +68,7 @@ type Engine struct {
 	micMonBuf *ring
 	fxOnSfx   atomic.Bool
 	running   atomic.Bool
+	lost      atomic.Bool // устройство остановилось само (отключили) — нужен перезапуск
 
 	micGain, ducking, sfxVol, monVol afloat
 	lvMic, lvOut, lvMon              afloat
@@ -160,7 +164,31 @@ func (e *Engine) Levels() Levels {
 func (e *Engine) Status() Status {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	return e.status
+	s := e.status
+	if e.lost.Load() {
+		s.Running = false
+		s.Error = "аудиоустройство отключилось — перезапускаю…"
+	}
+	return s
+}
+
+// onStop — miniaudio остановил устройство. Если это не наше закрытие (closeLocked сначала
+// снимает running), значит устройство пропало: помечаем, сторож перезапустит движок.
+// Вызывается из потока miniaudio, иногда изнутри Uninit — поэтому только атомики, без e.mu.
+func (e *Engine) onStop() {
+	if e.running.Swap(false) {
+		e.lost.Store(true)
+		log.Print("Аудио: устройство остановилось (отключили?) — перезапущу")
+	}
+}
+
+// HasDevice — есть ли в списке устройство с таким именем (те же правила, что при запуске).
+func HasDevice(list []Device, name string) bool {
+	names := make([]string, len(list))
+	for i, d := range list {
+		names[i] = d.Name
+	}
+	return matchDevice(names, name) >= 0
 }
 
 // Device — аудиоустройство для списка в интерфейсе.
@@ -305,6 +333,7 @@ func (e *Engine) Start(opt Options) error {
 
 func (e *Engine) startLocked() error {
 	e.status = Status{}
+	e.lost.Store(false)
 	if Demo {
 		return e.startDemoLocked()
 	}
@@ -324,7 +353,15 @@ func (e *Engine) startLocked() error {
 	}
 	e.status.CableFound = true
 
+	// выбранный микрофон или наушники отключены — работаем с устройством по умолчанию
+	// (звуки в эфир не должны пропадать из-за выдернутой гарнитуры), сторож вернёт выбор
+	var micMissing, monMissing string
 	micID, micName, err := findDevice(ctx, malgo.Capture, e.opt.MicDevice, IsCableInput)
+	if err != nil && e.opt.MicDevice != "" {
+		log.Printf("Аудио: микрофон «%s» не подключён — беру микрофон по умолчанию", e.opt.MicDevice)
+		micMissing = e.opt.MicDevice
+		micID, micName, err = findDevice(ctx, malgo.Capture, "", IsCableInput)
+	}
 	if err != nil {
 		return fmt.Errorf("микрофон: %w", err)
 	}
@@ -333,9 +370,13 @@ func (e *Engine) startLocked() error {
 		e.status.CableFound = false
 		return fmt.Errorf("виртуальный кабель: %w", err)
 	}
-	monID, monName, err := findDevice(ctx, malgo.Playback, e.opt.MonitorOut, func(n string) bool {
-		return IsVirtual(n) || n == outName
-	})
+	notCable := func(n string) bool { return IsVirtual(n) || n == outName }
+	monID, monName, err := findDevice(ctx, malgo.Playback, e.opt.MonitorOut, notCable)
+	if err != nil && e.opt.MonitorOut != "" {
+		log.Printf("Аудио: наушники «%s» не подключены — беру устройство по умолчанию", e.opt.MonitorOut)
+		monMissing = e.opt.MonitorOut
+		monID, monName, err = findDevice(ctx, malgo.Playback, "", notCable)
+	}
 	if err != nil {
 		return fmt.Errorf("наушники: %w", err)
 	}
@@ -354,7 +395,7 @@ func (e *Engine) startLocked() error {
 	if outID != nil {
 		cfg.Playback.DeviceID = outID.Pointer()
 	}
-	if e.duplex, err = malgo.InitDevice(ctx.Context, cfg, malgo.DeviceCallbacks{Data: e.onDuplex}); err != nil {
+	if e.duplex, err = malgo.InitDevice(ctx.Context, cfg, malgo.DeviceCallbacks{Data: e.onDuplex, Stop: e.onStop}); err != nil {
 		return fmt.Errorf("микрофон → кабель: %w", err)
 	}
 
@@ -367,7 +408,7 @@ func (e *Engine) startLocked() error {
 	if monID != nil {
 		mcfg.Playback.DeviceID = monID.Pointer()
 	}
-	if e.monitor, err = malgo.InitDevice(ctx.Context, mcfg, malgo.DeviceCallbacks{Data: e.onMonitor}); err != nil {
+	if e.monitor, err = malgo.InitDevice(ctx.Context, mcfg, malgo.DeviceCallbacks{Data: e.onMonitor, Stop: e.onStop}); err != nil {
 		return fmt.Errorf("наушники: %w", err)
 	}
 	if err := e.duplex.Start(); err != nil {
@@ -376,7 +417,8 @@ func (e *Engine) startLocked() error {
 	if err := e.monitor.Start(); err != nil {
 		return err
 	}
-	e.status = Status{Running: true, Mic: micName, VoiceOut: outName, Monitor: monName, CableFound: true}
+	e.status = Status{Running: true, Mic: micName, VoiceOut: outName, Monitor: monName, CableFound: true,
+		MicMissing: micMissing, MonitorMissing: monMissing}
 	e.running.Store(true)
 	log.Printf("Аудио: микрофон «%s» → «%s»; наушники «%s»", micName, outName, monName)
 	return nil

@@ -4,6 +4,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/qwkejkqwje1/dota-voicebox/internal/i18n"
 )
 
 // MenuPage — пунктов на странице (клавиши 1–9 и 0).
@@ -27,13 +29,18 @@ type Data struct {
 	Phrases []string // недавние фразы (новые первыми)
 	CanSay  bool     // есть синтез речи — можно сказать набранное
 
+	// «Читалка»: набранный текст читает голос персонажа
+	Voices   []Item   // персонажи (ID, Emoji, Label — имя, Find — описание)
+	Voice    string   // выбранный персонаж
+	ReadHist []string // недавно прочитанное (новое первым)
+
 	Empty string // текст пустой вкладки «Звуки» ("" — стандартный)
 }
 
 // Source — приложение со стороны меню.
 type Source interface {
 	MenuData() Data
-	Pick(kind, id string) // kind: "sound" | "effect" | "say" (id — фраза)
+	Pick(kind, id string) // kind: "sound" | "effect" | "say" (id — фраза) | "read[:голос]", "readme[:голос]" (id — текст)
 	StopAll()
 }
 
@@ -100,6 +107,10 @@ type Controller struct {
 	typing  bool   // строка поиска открыта
 	query   []rune // что набрано
 	results []Item // найденное (hover — выбранная строка)
+
+	reader bool // «Читалка»: строки — голоса или недавние фразы
+	voice  int  // выбранный голос (индекс в data.Voices)
+	vstart int  // первый показанный голос
 }
 
 // Open показывает меню с первой страницы звуков.
@@ -108,7 +119,8 @@ func (c *Controller) Open() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.visible, c.tab, c.page, c.hover, c.data = true, 0, 0, -1, d
-	c.typing, c.query, c.results = false, nil, nil
+	c.typing, c.query, c.results, c.reader = false, nil, nil, false
+	c.syncVoiceLocked()
 	c.lastInput = time.Now()
 }
 
@@ -138,7 +150,8 @@ func (c *Controller) Refresh() bool {
 	defer c.mu.Unlock()
 	changed := !sameItems(c.data.Sounds, d.Sounds) || !sameItems(c.data.Effects, d.Effects)
 	if c.typing {
-		changed = changed || !sameItems(c.data.Search, d.Search) || strings.Join(c.data.Phrases, "\n") != strings.Join(d.Phrases, "\n")
+		changed = changed || !sameItems(c.data.Search, d.Search) || strings.Join(c.data.Phrases, "\n") != strings.Join(d.Phrases, "\n") ||
+			!sameItems(c.data.Voices, d.Voices) || strings.Join(c.data.ReadHist, "\n") != strings.Join(d.ReadHist, "\n")
 	}
 	c.data = d
 	if c.typing {
@@ -400,6 +413,17 @@ func (c *Controller) Wheel(delta int) Result {
 		return Result{}
 	}
 	c.lastInput = time.Now()
+	if c.typing { // в «Читалке» колёсико выбирает голос, в поиске — ничего не листает
+		if c.reader && strings.TrimSpace(string(c.query)) != "" {
+			d := 1
+			if delta > 0 {
+				d = -1
+			}
+			c.stepVoiceLocked(d)
+			return Result{Handled: true, Redraw: true}
+		}
+		return Result{Handled: true}
+	}
 	p := c.pagesLocked()
 	if p < 2 {
 		return Result{Handled: true}
@@ -430,6 +454,9 @@ func (c *Controller) HoverAt(i int) bool {
 	if c.hover == i {
 		return false
 	}
+	if c.typing && c.reader && i >= 0 && i < len(c.results) && c.results[i].Kind == "voice" {
+		c.voice = c.vstart + i // голос под мышью — выбранный
+	}
 	c.hover = i
 	c.lastInput = time.Now()
 	return true
@@ -442,6 +469,9 @@ func (c *Controller) Click(kind string, i int) Result {
 		defer c.mu.Unlock()
 		c.lastInput = time.Now()
 		if kind == "row" {
+			if c.reader {
+				return c.readActivateLocked(i, false)
+			}
 			return c.activateLocked(i, false)
 		}
 		return Result{Handled: true}
@@ -487,9 +517,9 @@ func (c *Controller) View(scale float64) MenuView {
 	v := MenuView{Layout: c.data.Layout, Tab: c.tab, Page: c.page, Pages: c.pagesLocked(), Hover: c.hover,
 		Scale: scale * s, Opacity: c.data.Opacity}
 	effects := len(c.data.Effects) > 0
-	v.Tabs = []string{"Звуки"}
+	v.Tabs = []string{i18n.T("Звуки")}
 	if effects {
-		v.Tabs = append(v.Tabs, "Голос")
+		v.Tabs = append(v.Tabs, i18n.T("Голос"))
 	}
 	v.Footer = Footer(c.data.Layout, v.Pages, effects)
 	if c.tilesLocked() { // одинаковый размер на всех вкладках и страницах — полоска не прыгает
@@ -507,7 +537,7 @@ func (c *Controller) View(scale float64) MenuView {
 	if c.tab == 0 && len(items) == 0 {
 		v.Empty = c.data.Empty
 		if v.Empty == "" {
-			v.Empty = "Звуков пока нет — добавьте их в VoiceBox"
+			v.Empty = i18n.T("Звуков пока нет — добавьте их в VoiceBox")
 		}
 	}
 	return v
@@ -515,20 +545,20 @@ func (c *Controller) View(scale float64) MenuView {
 
 // Footer — подсказки по клавишам внизу меню (у полоски подвала нет).
 func Footer(layout string, pages int, effects bool) string {
-	parts := []string{"1–0 выбор"}
+	parts := []string{i18n.T("1–0 выбор")}
 	if pages > 1 {
 		k := "← →"
 		if layout == LayoutGrid {
 			k = "PgUp PgDn"
 		}
-		parts = append(parts, k+" стр.")
+		parts = append(parts, k+i18n.T(" стр."))
 	}
 	if effects {
-		parts = append(parts, "Tab голос")
+		parts = append(parts, i18n.T("Tab голос"))
 	}
-	parts = append(parts, "Enter поиск")
+	parts = append(parts, i18n.T("Enter поиск"))
 	if pages <= 1 && !effects {
-		parts = append(parts, "Backspace стоп")
+		parts = append(parts, i18n.T("Backspace стоп"))
 	}
 	return strings.Join(append(parts, "Esc"), "  ·  ")
 }

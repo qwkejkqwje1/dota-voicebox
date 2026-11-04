@@ -128,8 +128,17 @@ func (a *App) EffectItems() []MenuItem {
 	return out
 }
 
-// MenuPick — выбор в быстром меню: kind = "sound" | "effect" | "say" (id — фраза для команды).
+// MenuPick — выбор в быстром меню: kind = "sound" | "effect" | "say" (id — фраза для команды) |
+// "read[:<голос>]" (id — текст для «Читалки») | "readme[:<голос>]" (прочитать только себе).
 func (a *App) MenuPick(kind, id string) {
+	if v, ok := strings.CutPrefix(kind, "readme"); ok {
+		a.readPick(id, strings.TrimPrefix(v, ":"), "monitor")
+		return
+	}
+	if v, ok := strings.CutPrefix(kind, "read"); ok {
+		a.readPick(id, strings.TrimPrefix(v, ":"), "")
+		return
+	}
 	switch kind {
 	case "sound":
 		if err := a.PlayOpts(id, 1); err != nil {
@@ -168,7 +177,7 @@ func (a *App) SearchItems() []MenuItem {
 	for _, id := range a.PresetNames() {
 		title, emoji := PresetTitle(id)
 		out = append(out, MenuItem{ID: id, Label: title, Emoji: emoji, Color: "#8b5cf6", Key: hk["preset:"+id], Active: id == cur,
-			Kind: "effect", Find: "эффект голос " + id})
+			Kind: "effect", Find: "эффект голос effect voice " + id})
 	}
 	return out
 }

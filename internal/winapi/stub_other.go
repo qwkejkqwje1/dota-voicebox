@@ -5,6 +5,7 @@ package winapi
 import (
 	"errors"
 	"log"
+	"os/exec"
 
 	"github.com/qwkejkqwje1/dota-voicebox/internal/combo"
 	"github.com/qwkejkqwje1/dota-voicebox/internal/keys"
@@ -39,6 +40,9 @@ func OpenNetworkSettings() error       { return errWin }
 func OpenURL(string) error             { return errWin }
 func Autostart() bool                  { return false }
 func SetAutostart(bool) error          { return errWin }
+func HasShortcut(string) bool          { return false }
+func SetShortcut(string, bool) error   { return errWin }
+func HealShortcuts() []string          { return nil }
 func Alert(title, text string)         { log.Printf("%s: %s", title, text) }
 func SetHighPriority()                 {}
 func AllowForeground()                 {}
@@ -58,6 +62,7 @@ func (s *Shell) RefreshMenu()                 {}
 func (s *Shell) MenuVisible() bool            { return false }
 func (s *Shell) OpenWheel(uint32)             {}
 func (s *Shell) OpenSay()                     {}
+func (s *Shell) OpenReader()                  {}
 func (s *Shell) Toast(overlay.ToastView)      {}
 func (s *Shell) SetTooltip(string)            {}
 func (s *Shell) Balloon(string, string)       {}
@@ -67,6 +72,8 @@ func (s *Shell) Close()                       {}
 func NewTTS(cacheDir, voice string, rate int) *TTS { return nil }
 
 func (t *TTS) synth([]ttsItem) error    { return errWin }
+func CloseTTS()                         {}
+func hideWindow(*exec.Cmd)              {}
 func (t *TTS) Voices() ([]Voice, error) { return nil, errWin }
 
 // AudioEndpoint — устройство звука Windows (заглушка).

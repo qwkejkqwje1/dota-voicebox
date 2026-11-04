@@ -5,9 +5,11 @@ import (
 	"log"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/qwkejkqwje1/dota-voicebox/internal/config"
 	"github.com/qwkejkqwje1/dota-voicebox/internal/gsi"
+	"github.com/qwkejkqwje1/dota-voicebox/internal/i18n"
 	"github.com/qwkejkqwje1/dota-voicebox/internal/sounds"
 	"github.com/qwkejkqwje1/dota-voicebox/internal/timers"
 )
@@ -49,9 +51,9 @@ func buildDefs(cfg *config.Config) map[string]sounds.Def {
 			return sounds.Def{Files: []string{defaultSignal, "tts:" + say}, Seq: true, Bus: bus, Volume: vol,
 				Mode: sounds.ModeInterrupt, Dota: true, Hidden: true}
 		}
-		defs[roshSound("aegis")] = mk(withIn("Аегис пропадёт", cfg.Rosh.AegisWarn))
-		defs[roshSound("min")] = mk(withIn("Рошан может появиться", cfg.Rosh.MinWarn))
-		defs[roshSound("max")] = mk("Рошан точно возродился")
+		defs[roshSound("aegis")] = mk(withIn(i18n.T("Аегис пропадёт"), cfg.Rosh.AegisWarn))
+		defs[roshSound("min")] = mk(withIn(i18n.T("Рошан может появиться"), cfg.Rosh.MinWarn))
+		defs[roshSound("max")] = mk(i18n.T("Рошан точно возродился"))
 	}
 	return defs
 }
@@ -97,18 +99,16 @@ func signalFiles(cfg *config.Config, ref string) []string {
 }
 
 // ReminderPhrase — что сказать: своя фраза или «<название> через N секунд».
-// В своей фразе {время} заменяется на «через 40 секунд» (или «сейчас», если «До» = 0).
+// В своей фразе {время} (или {time}) заменяется на «через 40 секунд» (или «сейчас», если «До» = 0).
+// Фраза по-английски — и время по-английски: «in 40 seconds», «now».
 func ReminderPhrase(r config.Reminder) string {
 	if s := strings.TrimSpace(r.Say); s != "" {
 		if s == "-" {
 			return "" // только сигнал
 		}
-		if strings.Contains(s, "{время}") {
-			in := "сейчас"
-			if r.Before > 0 {
-				in = "через " + Seconds(r.Before)
-			}
-			s = strings.ReplaceAll(s, "{время}", in)
+		if strings.Contains(s, "{время}") || strings.Contains(s, "{time}") {
+			in := inTime(r.Before, phraseEn(strings.NewReplacer("{время}", "", "{time}", "").Replace(s)))
+			s = strings.NewReplacer("{время}", in, "{time}", in).Replace(s)
 		}
 		return s
 	}
@@ -119,7 +119,51 @@ func withIn(label string, sec int) string {
 	if sec <= 0 {
 		return label
 	}
-	return label + " через " + Seconds(sec)
+	return label + " " + inTime(sec, phraseEn(label))
+}
+
+// phraseEn — фраза на английском: латиница без русских букв (без букв вовсе — как язык интерфейса).
+func phraseEn(s string) bool {
+	if i18n.Cyrillic(s) {
+		return false
+	}
+	for _, r := range s {
+		if r < 128 && unicode.IsLetter(r) {
+			return true
+		}
+	}
+	return i18n.En()
+}
+
+// inTime — «через 40 секунд» или «in 40 seconds»; 0 — «сейчас» / «now».
+func inTime(sec int, en bool) string {
+	switch {
+	case sec <= 0 && en:
+		return "now"
+	case sec <= 0:
+		return "сейчас"
+	case en:
+		return "in " + SecondsEn(sec)
+	}
+	return "через " + Seconds(sec)
+}
+
+// SecondsEn — «20 seconds», «1 minute», «1 minute 30 seconds».
+func SecondsEn(n int) string {
+	unit := func(n int, w string) string {
+		if n == 1 {
+			return "1 " + w
+		}
+		return fmt.Sprintf("%d %ss", n, w)
+	}
+	if n >= 60 {
+		out := unit(n/60, "minute")
+		if s := n % 60; s > 0 {
+			out += " " + unit(s, "second")
+		}
+		return out
+	}
+	return unit(n, "second")
 }
 
 // Seconds — «20 секунд», «1 минуту», «1 минуту 30 секунд».

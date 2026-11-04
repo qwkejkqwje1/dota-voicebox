@@ -29,6 +29,8 @@ var MaxRun = 300 * time.Millisecond
 type Host interface {
 	Play(ref, to string, volume float64) error
 	Say(text, to string) error
+	// Read — «Читалка»: текст читает голос персонажа (voice — id, "" — из настроек). Фразы идут очередью.
+	Read(text, to, voice string) error
 	Stop(ref string)
 	SetPreset(name string) error
 	Preset() string
@@ -493,8 +495,21 @@ func (s *Script) install() {
 	})
 	vm.Set("say", func(call goja.FunctionCall) goja.Value {
 		o := opts(call, 1)
-		if err := s.host.Say(call.Argument(0).String(), optStr(o, "to", "team")); err != nil {
+		var err error
+		if v := optStr(o, "voice", ""); v != "" { // голос персонажа — как read()
+			err = s.host.Read(call.Argument(0).String(), optStr(o, "to", "team"), v)
+		} else {
+			err = s.host.Say(call.Argument(0).String(), optStr(o, "to", "team"))
+		}
+		if err != nil {
 			s.print("say: " + err.Error())
+		}
+		return goja.Undefined()
+	})
+	vm.Set("read", func(call goja.FunctionCall) goja.Value {
+		o := opts(call, 1)
+		if err := s.host.Read(call.Argument(0).String(), optStr(o, "to", ""), optStr(o, "voice", "")); err != nil {
+			s.print("read: " + err.Error())
 		}
 		return goja.Undefined()
 	})

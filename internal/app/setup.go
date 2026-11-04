@@ -319,6 +319,12 @@ func (a *App) Watchdog() {
 			if cbl, _ := a.cableNames(cp, p); err == nil && cbl != "" {
 				a.Fix("audio")
 			}
+		} else if st := a.out.Status(); (st.MicMissing != "" || st.MonitorMissing != "") && n%2 == 0 {
+			// выбранное устройство снова подключили — возвращаемся к нему
+			if cp, p, err := audio.Devices(); err == nil && missingBack(st, cp, p) {
+				log.Print("Аудио: выбранное устройство снова подключено — переключаюсь на него")
+				a.Fix("audio")
+			}
 		}
 		if n%6 == 1 {
 			a.refreshGSIConfig()

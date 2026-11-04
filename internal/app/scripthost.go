@@ -64,6 +64,32 @@ func (h *scriptHost) Say(text, to string) error {
 	return nil
 }
 
+// Read — «Читалка» для скриптов: фраза в очередь (не перебивает чат и другие фразы).
+func (h *scriptHost) Read(text, to, voice string) error {
+	bus, err := busFor(to)
+	if err != nil {
+		return err
+	}
+	if voice != "" {
+		if _, ok := FindReaderVoice(voice); !ok {
+			ids := make([]string, len(ReaderVoices))
+			for i, v := range ReaderVoices {
+				ids[i] = v.ID
+			}
+			return fmt.Errorf("голос %q не найден — есть %s", voice, strings.Join(ids, ", "))
+		}
+	}
+	text = readText(text, 300)
+	if !hasWords(text) {
+		return fmt.Errorf("пустой текст")
+	}
+	if !h.a.CanSay() {
+		return fmt.Errorf("синтез речи недоступен на этой системе")
+	}
+	h.a.queueRead(readReq{text: text, voice: voice, to: bus, src: "script"})
+	return nil
+}
+
 func (h *scriptHost) Stop(ref string) {
 	h.a.out.Voice().Stop(ref)
 	h.a.out.Monitor().Stop(ref)

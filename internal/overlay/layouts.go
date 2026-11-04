@@ -7,6 +7,8 @@ import (
 	"math"
 
 	"golang.org/x/image/vector"
+
+	"github.com/qwkejkqwje1/dota-voicebox/internal/i18n"
 )
 
 // Полоска и сетка: те же пункты, что в списке, но плитками.
@@ -113,7 +115,7 @@ func (r *Renderer) strip(v MenuView) (*image.RGBA, Layout) {
 	if slots == 0 {
 		msg := v.Empty
 		if msg == "" {
-			msg = "Пусто — добавьте звуки в VoiceBox"
+			msg = i18n.T("Пусто — добавьте звуки в VoiceBox")
 		}
 		f := r.F.face(r.F.Regular, px(13))
 		textCentered(img, f, ellipsize(f, msg, px(stEmptyW-16)), rect{x, y, px(stEmptyW), th}, colDim)
@@ -175,7 +177,7 @@ func (r *Renderer) grid(v MenuView) (*image.RGBA, Layout) {
 	if slots == 0 {
 		msg := v.Empty
 		if msg == "" {
-			msg = "Пусто — добавьте звуки в VoiceBox"
+			msg = i18n.T("Пусто — добавьте звуки в VoiceBox")
 		}
 		textCentered(img, r.F.face(r.F.Regular, px(13)), msg, rect{x0, y, px(innerW), px(grTileH)}, colDim)
 	} else {
@@ -228,7 +230,7 @@ func (r *Renderer) tile(img *image.RGBA, t rect, it Item, hover bool, st tileSty
 	if st.hint > 0 {
 		hint := it.Hint
 		if it.Pending {
-			hint = "готовится…"
+			hint = i18n.T("готовится…")
 		}
 		if hint != "" {
 			hf := r.F.face(r.F.Regular, px(st.hint))

@@ -1,4 +1,5 @@
 // Обрезка звука: волна с ручками начала и конца, время, «убрать тишину», «послушать».
+import {_t, _tf, dec} from './i18n.js';
 import {app, h, api, act, toast, dialog} from './core.js';
 
 const MIN = 0.05; // самый короткий кусок, сек
@@ -6,7 +7,7 @@ const MIN = 0.05; // самый короткий кусок, сек
 // 83,25 → «1:23,25»; 3,5 → «3,50»
 export const fmtT = t => {
   t = Math.max(0, t);
-  const m = Math.floor(t / 60), s = (t - m * 60).toFixed(2).replace('.', ',');
+  const m = Math.floor(t / 60), s = dec((t - m * 60).toFixed(2));
   return m ? m + ':' + s.padStart(5, '0') : s;
 };
 export const parseT = str => {
@@ -14,7 +15,7 @@ export const parseT = str => {
   const v = p.length > 1 ? (+p[0]) * 60 + (+p[1]) : +p[0];
   return Number.isFinite(v) ? v : null;
 };
-const fmtLen = t => t.toFixed(2).replace('.', ',') + ' с';
+const fmtLen = t => dec(t.toFixed(2)) + _t(' с');
 
 // trimEditor — o: {wave: {duration, peaks, start, end, sound: [s, e]}, play(start, end), stop()}.
 // Возвращает {el, get: () => [start, end]}. Элемент создаётся один раз и переживает перерисовки окна.
@@ -24,21 +25,21 @@ export function trimEditor(o) {
   const cv = h('canvas');
   const shL = h('div', {class: 'wave-sh'}), shR = h('div', {class: 'wave-sh r'});
   const ph = h('div', {class: 'wave-ph hidden'});
-  const hs = h('div', {class: 'wave-h', tabindex: 0, role: 'slider', 'aria-label': 'Начало', title: 'Начало: тяните мышью или ← → (Shift — шаг больше)'});
-  const he = h('div', {class: 'wave-h', tabindex: 0, role: 'slider', 'aria-label': 'Конец', title: 'Конец: тяните мышью или ← → (Shift — шаг больше)'});
+  const hs = h('div', {class: 'wave-h', tabindex: 0, role: 'slider', 'aria-label': _t('Начало'), title: _t('Начало: тяните мышью или ← → (Shift — шаг больше)')});
+  const he = h('div', {class: 'wave-h', tabindex: 0, role: 'slider', 'aria-label': _t('Конец'), title: _t('Конец: тяните мышью или ← → (Shift — шаг больше)')});
   const box = h('div', {class: 'wave'}, cv, shL, shR, ph, hs, he);
   const inS = h('input', {class: 'input', value: fmtT(s), onchange: ev => setTime('s', ev.target.value)});
   const inE = h('input', {class: 'input', value: fmtT(e), onchange: ev => setTime('e', ev.target.value)});
   const len = h('b', {});
-  const playBtn = h('button', {class: 'btn sm primary play-btn', title: 'Послушать выбранный кусок (слышите только вы)', onclick: () => raf ? stop() : play()}, '▶ Послушать');
+  const playBtn = h('button', {class: 'btn sm primary play-btn', title: _t('Послушать выбранный кусок (слышите только вы)'), onclick: () => raf ? stop() : play()}, _t('▶ Послушать'));
   const el = h('div', {class: 'trim'}, box,
     h('div', {class: 'trim-row'},
-      h('label', {class: 'field'}, h('span', {}, 'Начало'), inS),
-      h('label', {class: 'field'}, h('span', {}, 'Конец'), inE),
-      h('div', {class: 'trim-len'}, h('span', {class: 'flabel'}, 'Останется'), len),
+      h('label', {class: 'field'}, h('span', {}, _t('Начало')), inS),
+      h('label', {class: 'field'}, h('span', {}, _t('Конец')), inE),
+      h('div', {class: 'trim-len'}, h('span', {class: 'flabel'}, _t('Останется')), len),
       h('div', {class: 'grow'}),
-      h('button', {class: 'btn sm', title: 'Срезать тишину в начале и в конце', onclick: () => set(w.sound[0], w.sound[1])}, '✂️ Убрать тишину'),
-      h('button', {class: 'btn sm ghost', title: 'Вернуть весь звук', onclick: () => set(0, dur)}, '↔ Весь'),
+      h('button', {class: 'btn sm', title: _t('Срезать тишину в начале и в конце'), onclick: () => set(w.sound[0], w.sound[1])}, _t('✂️ Убрать тишину')),
+      h('button', {class: 'btn sm ghost', title: _t('Вернуть весь звук'), onclick: () => set(0, dur)}, _t('↔ Весь')),
       playBtn));
 
   function set(a, b) {
@@ -51,7 +52,7 @@ export function trimEditor(o) {
   const moveE = t => set(s, Math.max(t, s + MIN));
   function setTime(which, str) {
     const v = parseT(str);
-    if (v == null) { toast('Время — в секундах, например 1,25 или 1:05,50', 'err'); paint(); return; }
+    if (v == null) { toast(_t('Время — в секундах, например 1,25 или 1:05,50'), 'err'); paint(); return; }
     if (which === 's') moveS(v); else moveE(v);
   }
   function paint() {
@@ -115,7 +116,7 @@ export function trimEditor(o) {
     try { await o.play(s, e); } catch (er) { toast(er.message, 'err'); return; }
     const t0 = performance.now(), a = s, b = e;
     ph.classList.remove('hidden');
-    playBtn.textContent = '⏹ Стоп';
+    playBtn.textContent = _t('⏹ Стоп');
     const tick = () => {
       const t = a + (performance.now() - t0) / 1000;
       if (t >= b || !el.isConnected) { stop(false); return; }
@@ -128,7 +129,7 @@ export function trimEditor(o) {
     if (raf) cancelAnimationFrame(raf);
     raf = 0;
     ph.classList.add('hidden');
-    playBtn.textContent = '▶ Послушать';
+    playBtn.textContent = _t('▶ Послушать');
     if (send) o.stop();
   }
   paint();
@@ -147,21 +148,21 @@ export async function trimDialog(s, done = () => {}) {
   try { w = await api('/api/sounds/wave?id=' + encodeURIComponent(s.id)); } catch (e) { toast(e.message, 'err'); return; }
   const trimmed = w.start > 0 || w.end < w.duration;
   const ed = trimEditor({wave: w, play: (a, b) => api('/api/sounds/wave/play', {id: s.id, start: a, end: b}), stop: stopPreview});
-  const d = dialog({title: '✂️ Обрезать «' + s.title + '»', wide: true,
+  const d = dialog({title: _tf('✂️ Обрезать «{0}»', s.title), wide: true,
     onClose: () => { ed.stop(); api('/api/sounds/wave/done', {}).catch(() => {}); },
     body: () => [
-      h('p', {class: 'hint', style: 'margin:0 0 12px'}, 'Перетащите ручки или нажмите на волну. «Убрать тишину» срежет тихие края сама. Файл не меняется — обрезку можно сбросить в любой момент.'),
+      h('p', {class: 'hint', style: 'margin:0 0 12px'}, _t('Перетащите ручки или нажмите на волну. «Убрать тишину» срежет тихие края сама. Файл не меняется — обрезку можно сбросить в любой момент.')),
       ed.el],
     foot: () => [
       trimmed ? h('button', {class: 'btn ghost', onclick: async () => {
-        if (await act('/api/sounds/trim', {id: s.id, start: 0, end: 0}, {ok: 'Обрезка сброшена — звук целиком'})) { d.close(); done(); }
-      }}, '↺ Без обрезки') : null,
+        if (await act('/api/sounds/trim', {id: s.id, start: 0, end: 0}, {ok: _t('Обрезка сброшена — звук целиком')})) { d.close(); done(); }
+      }}, _t('↺ Без обрезки')) : null,
       h('div', {class: 'grow'}),
-      h('button', {class: 'btn', onclick: () => d.close()}, 'Отмена'),
+      h('button', {class: 'btn', onclick: () => d.close()}, _t('Отмена')),
       h('button', {class: 'btn primary', onclick: async () => {
         const [a, b] = ed.get();
-        if (await act('/api/sounds/trim', {id: s.id, start: a, end: b}, {ok: '✂️ Звук обрезан: ' + fmtLen(b - a)})) { d.close(); done(); }
-      }}, 'Сохранить')]});
+        if (await act('/api/sounds/trim', {id: s.id, start: a, end: b}, {ok: _t('✂️ Звук обрезан: ') + fmtLen(b - a)})) { d.close(); done(); }
+      }}, _t('Сохранить'))]});
   return d;
 }
 

@@ -20,6 +20,7 @@ import (
 	"github.com/qwkejkqwje1/dota-voicebox/internal/dsp"
 	"github.com/qwkejkqwje1/dota-voicebox/internal/gameclock"
 	"github.com/qwkejkqwje1/dota-voicebox/internal/gsi"
+	"github.com/qwkejkqwje1/dota-voicebox/internal/i18n"
 	"github.com/qwkejkqwje1/dota-voicebox/internal/keys"
 	"github.com/qwkejkqwje1/dota-voicebox/internal/script"
 	"github.com/qwkejkqwje1/dota-voicebox/internal/sounds"
@@ -52,22 +53,23 @@ type App struct {
 	BaseDir    string
 	Version    string
 
-	mu        sync.Mutex
-	cfg       *config.Config
-	lib       *sounds.Library
-	out       Output
-	hk        *winapi.Hotkeys
-	combos    []keys.Combo
-	timers    *timers.Engine
-	presets   map[string][]dsp.Spec
-	order     []string
-	preset    string
-	actions   map[string]string
-	mouseActs map[[2]uint32]string // сочетания с кнопками мыши (через перехват, RegisterHotKey их не умеет)
-	pttVK     uint32
-	devOpts   *audio.Options
-	speech    Speech
-	remLabels map[string]string // id таймера → подпись для «Ближайшие»
+	mu          sync.Mutex
+	cfg         *config.Config
+	lib         *sounds.Library
+	out         Output
+	hk          *winapi.Hotkeys
+	combos      []keys.Combo
+	timers      *timers.Engine
+	presets     map[string][]dsp.Spec
+	order       []string
+	preset      string
+	actions     map[string]string
+	mouseActs   map[[2]uint32]string // сочетания с кнопками мыши (через перехват, RegisterHotKey их не умеет)
+	pttVK       uint32
+	devOpts     *audio.Options
+	missingNote string // о каком отключённом устройстве уже сказали
+	speech      Speech
+	remLabels   map[string]string // id таймера → подпись для «Ближайшие»
 
 	gsiMu     sync.Mutex
 	prevState *gsi.State
@@ -97,8 +99,9 @@ type App struct {
 	remUntil time.Time // очередь напоминаний: не говорить одновременно
 
 	presetSave *time.Timer
-	phrases    []string // недавние фразы из меню поверх игры
-	rec        recState // запись и обрезка звуков
+	phrases    []string    // недавние фразы из меню поверх игры
+	rec        recState    // запись и обрезка звуков
+	rd         readerState // «Читалка»: история, повтор, очередь чата
 
 	enhMu     sync.Mutex // улучшение голоса: что уже применено
 	enhTimbre string
@@ -117,6 +120,8 @@ type App struct {
 	OnMenu func()
 	// OnSay — действие "say": быстрое меню сразу в режиме набора текста (поиск или фраза для команды).
 	OnSay func()
+	// OnReader — действие "reader": меню поверх игры в режиме «Читалки» (текст читает голос персонажа).
+	OnReader func()
 	// OnWheel — действие "wheel": колесо звуков у курсора. vk — клавиша, которую держат
 	// (отпустили — выбор), 0 — открыть без клавиши (выбор щелчком).
 	OnWheel func(vk uint32)
@@ -135,6 +140,7 @@ type Toast struct {
 
 func (a *App) toast(t Toast) {
 	if a.OnToast != nil {
+		t.Text, t.Sub = i18n.T(t.Text), i18n.T(t.Sub) // английский интерфейс
 		a.OnToast(t)
 	}
 }
@@ -243,6 +249,7 @@ func (a *App) Reload() error {
 	if err != nil {
 		return err
 	}
+	i18n.SetLang(UILang(cfg))
 	a.mu.Lock()
 	sp := a.speech
 	a.mu.Unlock()
@@ -309,6 +316,7 @@ func (a *App) Reload() error {
 		if err := a.out.Start(opts); err != nil {
 			log.Printf("Аудио: %v", err)
 		}
+		a.noteMissing()
 	}
 
 	if first {
@@ -459,7 +467,8 @@ func (a *App) openWheel(vk uint32) {
 }
 
 // Do выполняет действие: sound:<id>[@bus], preset:<name|next|prev>, set:<id|next|prev|all>, stop, menu, wheel, say,
-// rosh, mic_monitor, reload, ui, talk, mic_mute, denoise, bg.
+// reader, reader:repeat, reader:stop, reader:next, chat_read, rosh, mic_monitor, mic:next, reload, ui, talk, mic_mute,
+// denoise, bg.
 func (a *App) Do(act string) {
 	switch {
 	case strings.HasPrefix(act, "sound:"):
@@ -484,6 +493,22 @@ func (a *App) Do(act string) {
 		} else {
 			log.Print("Набор текста поверх игры доступен только в Windows")
 		}
+	case act == "reader":
+		if a.OnReader != nil {
+			a.OnReader()
+		} else {
+			log.Print("«Читалка» поверх игры доступна только в Windows")
+		}
+	case act == "reader:repeat":
+		if err := a.ReadRepeat(); err != nil {
+			a.toast(Toast{Emoji: "🔁", Text: "Повторять нечего", Sub: err.Error()})
+		}
+	case act == "reader:stop":
+		a.ReadStop()
+	case act == "reader:next":
+		a.cycleReaderVoice()
+	case act == "chat_read":
+		a.toggleChatRead()
 	case act == "denoise":
 		a.toggleDenoise()
 	case act == "bg":
@@ -498,6 +523,8 @@ func (a *App) Do(act string) {
 		}
 	case act == "rosh":
 		a.RoshKilled()
+	case act == "mic:next":
+		a.cycleMic()
 	case act == "mic_monitor":
 		on := a.out.ToggleMicMonitor()
 		log.Printf("Самопрослушка голоса: %v", map[bool]string{true: "ВКЛ", false: "выкл"}[on])
@@ -732,7 +759,7 @@ func (a *App) rememberPreset(name string) {
 // PresetTitle — название и значок эффекта для уведомлений.
 func PresetTitle(id string) (title, emoji string) {
 	if p, ok := dsp.FindPreset(id); ok {
-		return p.Title, p.Emoji
+		return i18n.T(p.Title), p.Emoji
 	}
 	return id, "🎛️"
 }
@@ -841,6 +868,51 @@ func (a *App) RoshKilled() {
 	a.PlayOpts("beep@monitor", 0.6)
 }
 
+// SetUILang — язык интерфейса: "ru", "en" или "" (как у Windows). Пока не пройдена первая настройка и
+// звуки те же, что по умолчанию, встроенные звуки, фразы и напоминания пишутся заново на новом языке
+// (прошлый config.json остаётся в резервных копиях).
+func (a *App) SetUILang(l string) error {
+	if l != "" && l != "ru" && l != "en" {
+		return fmt.Errorf("неизвестный язык интерфейса %q", l)
+	}
+	cur := a.Config()
+	to := l
+	if to == "" {
+		to = i18n.Detect(winapi.UILanguage())
+	}
+	if !cur.SetupDone && UILang(cur) != to {
+		var was, fresh config.Config
+		if json.Unmarshal(config.DefaultFor(UILang(cur)), &was) == nil && json.Unmarshal(config.DefaultFor(to), &fresh) == nil &&
+			sameKeys(cur.Sounds, was.Sounds) {
+			fresh.Devices, fresh.Remote, fresh.UI, fresh.UILang = cur.Devices, cur.Remote, cur.UI, l
+			fresh.Fix()
+			a.scripts.SwapExamples(to == "en")
+			return a.SaveConfig(&fresh)
+		}
+	}
+	return a.UpdateConfig(func(c *config.Config) { c.UILang = l })
+}
+
+func sameKeys[V any](x, y map[string]V) bool {
+	if len(x) != len(y) {
+		return false
+	}
+	for k := range x {
+		if _, ok := y[k]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+// UILang — язык интерфейса: из настроек, а если не задан — как у Windows.
+func UILang(cfg *config.Config) string {
+	if cfg.UILang == "en" || cfg.UILang == "ru" {
+		return cfg.UILang
+	}
+	return i18n.Detect(winapi.UILanguage())
+}
+
 // OnGSI обрабатывает пакет состояния от Dota 2.
 func (a *App) OnGSI(st *gsi.State, raw []byte) {
 	if st.Map == nil {
@@ -867,10 +939,15 @@ func (a *App) OnGSI(st *gsi.State, raw []byte) {
 		newGame = true
 	}
 	evs := gsi.Diff(a.prevState, st, lowHP)
-	// события провайдера "events": Рошан убит и т.п. (приходят повторно — дедуп по типу+времени)
+	// события провайдера "events": Рошан убит, сообщения чата и т.п. (приходят повторно — дедуп по типу+времени,
+	// у чата — ещё по игроку, каналу и тексту)
 	var roshKilled bool
+	var chat []gsi.Event
 	for _, e := range st.Events {
-		key := fmt.Sprintf("%s@%d", e.EventType, e.GameTime)
+		key := fmt.Sprintf("%s@%g", e.EventType, e.GameTime)
+		if e.EventType == gsi.EvChat {
+			key = fmt.Sprintf("chat@%g|%d|%d|%s", e.GameTime, e.PlayerID, e.ChannelType, e.Message)
+		}
 		if a.seenEv[key] {
 			continue
 		}
@@ -878,14 +955,27 @@ func (a *App) OnGSI(st *gsi.State, raw []byte) {
 		if a.prevState == nil { // старые события из первого пакета не повторяем
 			continue
 		}
+		if e.EventType == gsi.EvChat {
+			chat = append(chat, e)
+			continue
+		}
 		evs = append(evs, e.EventType)
 		if e.EventType == "roshan_killed" {
 			roshKilled = true
 		}
 	}
+	own := -1
+	if len(chat) > 0 {
+		own = ownPlayerID(st)
+		sort.SliceStable(chat, func(i, j int) bool { return chat[i].GameTime < chat[j].GameTime })
+	}
 	a.prevState = st
 	a.rawState = raw
 	a.gsiMu.Unlock()
+
+	if len(chat) > 0 {
+		a.onChat(chat, own)
+	}
 
 	if newGame {
 		a.scripts.Event("new_game", nil)

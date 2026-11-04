@@ -5,9 +5,11 @@ import (
 	"math"
 	"math/rand"
 	"os"
+	"strings"
 
 	"github.com/gen2brain/malgo"
 
+	"github.com/qwkejkqwje1/dota-voicebox/internal/i18n"
 	"github.com/qwkejkqwje1/dota-voicebox/internal/sounds"
 )
 
@@ -19,7 +21,9 @@ var Demo = os.Getenv("VOICEBOX_DEMO") != ""
 var demoCapture = []Device{
 	{Name: "Микрофон (Realtek(R) Audio)", IsDefault: true},
 	{Name: "Микрофон (HyperX Cloud II)"},
+	{Name: "Микрофон (Logitech BRIO)"},
 	{Name: "CABLE Output (VB-Audio Virtual Cable)", Virtual: true},
+	{Name: "Voicemeeter Out B1 (VB-Audio Voicemeeter VAIO)", Virtual: true},
 }
 
 var demoPlayback = []Device{
@@ -28,8 +32,21 @@ var demoPlayback = []Device{
 	{Name: "CABLE Input (VB-Audio Virtual Cable)", Virtual: true},
 }
 
+// demoEn — в английском интерфейсе устройства называются как в английской Windows.
+var demoEn = strings.NewReplacer("Микрофон (", "Microphone (", "Динамики (", "Speakers (", "Наушники (", "Headphones (")
+
+func demoList(l []Device) []Device {
+	out := append([]Device(nil), l...)
+	if i18n.En() {
+		for i := range out {
+			out[i].Name = demoEn.Replace(out[i].Name)
+		}
+	}
+	return out
+}
+
 func demoDevices() ([]Device, []Device, error) {
-	return append([]Device(nil), demoCapture...), append([]Device(nil), demoPlayback...), nil
+	return demoList(demoCapture), demoList(demoPlayback), nil
 }
 
 // backendNull — «пустой» бэкенд miniaudio. Константы malgo отстают от miniaudio: после webaudio
@@ -42,26 +59,29 @@ func (e *Engine) startDemoLocked() error {
 		return err
 	}
 	e.ctx = ctx
-	pick := func(sub string, list []Device, virtual bool) string {
+	// missing — выбранного устройства нет в списке (как на настоящем железе: берём по умолчанию)
+	pick := func(sub string, list []Device, virtual bool) (name, missing string) {
 		names := make([]string, len(list))
 		for i, d := range list {
 			names[i] = d.Name
 		}
 		if sub != "" {
 			if i := matchDevice(names, sub); i >= 0 {
-				return names[i]
+				return names[i], ""
 			}
+			missing = sub
 		}
 		for _, d := range list {
 			if d.Virtual == virtual && (virtual || d.IsDefault) {
-				return d.Name
+				return d.Name, missing
 			}
 		}
-		return names[0]
+		return names[0], missing
 	}
-	micName := pick(e.opt.MicDevice, demoCapture, false)
-	outName := pick(e.opt.VoiceOut, demoPlayback, true)
-	monName := pick(e.opt.MonitorOut, demoPlayback, false)
+	capture, playback := demoList(demoCapture), demoList(demoPlayback)
+	micName, micMissing := pick(e.opt.MicDevice, capture, false)
+	outName, _ := pick(e.opt.VoiceOut, playback, true)
+	monName, monMissing := pick(e.opt.MonitorOut, playback, false)
 
 	cfg := malgo.DefaultDeviceConfig(malgo.Duplex)
 	cfg.SampleRate = sounds.SampleRate
@@ -87,7 +107,8 @@ func (e *Engine) startDemoLocked() error {
 	if err := e.monitor.Start(); err != nil {
 		return err
 	}
-	e.status = Status{Running: true, Mic: micName, VoiceOut: outName, Monitor: monName, CableFound: true}
+	e.status = Status{Running: true, Mic: micName, VoiceOut: outName, Monitor: monName, CableFound: true,
+		MicMissing: micMissing, MonitorMissing: monMissing}
 	e.running.Store(true)
 	log.Printf("Аудио (демо): микрофон «%s» → «%s»; наушники «%s»", micName, outName, monName)
 	return nil

@@ -4,6 +4,8 @@ import (
 	"image"
 	"image/color"
 	"strings"
+
+	"github.com/qwkejkqwje1/dota-voicebox/internal/i18n"
 )
 
 // Item — строка меню.
@@ -45,6 +47,9 @@ type MenuView struct {
 	Typing  bool    // режим набора: вместо вкладок — строка поиска
 	Query   string  // что набрано
 	Hint    string  // подсказка в пустой строке поиска
+
+	Badge      string // значок справа в строке набора: голос «Читалки» ("" — нет)
+	BadgeEmoji string
 }
 
 // Layout — где что нарисовано (для мыши).
@@ -191,7 +196,7 @@ func (r *Renderer) list(v MenuView) (*image.RGBA, Layout) {
 	if rows == 0 {
 		msg := v.Empty
 		if msg == "" {
-			msg = "Пусто — добавьте звуки в VoiceBox"
+			msg = i18n.T("Пусто — добавьте звуки в VoiceBox")
 		}
 		textCentered(img, reg(13), msg, rect{x0, y, innerW, px(rowH)}, colDim)
 		y += px(rowH + rowGap)
@@ -226,8 +231,8 @@ func (r *Renderer) list(v MenuView) (*image.RGBA, Layout) {
 			bars(img, rect{right - px(14), row.y + px(13), px(14), px(14)}, colAccent)
 			right -= px(22)
 		} else if it.Pending {
-			text(img, reg(11.5), "готовится…", right-measure(reg(11.5), "готовится…"), row.y+(row.h+capHeight(reg(11.5)))/2, colFaint)
-			right -= measure(reg(11.5), "готовится…") + px(8)
+			text(img, reg(11.5), i18n.T("готовится…"), right-measure(reg(11.5), i18n.T("готовится…")), row.y+(row.h+capHeight(reg(11.5)))/2, colFaint)
+			right -= measure(reg(11.5), i18n.T("готовится…")) + px(8)
 		}
 		if it.Hint != "" && !it.Pending {
 			hf := reg(11.5)
@@ -276,7 +281,7 @@ func (r *Renderer) header(img *image.RGBA, L *Layout, v MenuView, x0, y, innerW 
 		L.Grip = g.image()
 		return y + px(tabsH+8)
 	}
-	title := "Быстрое меню"
+	title := i18n.T("Быстрое меню")
 	if len(v.Tabs) == 1 {
 		title = v.Tabs[0]
 	}
@@ -295,7 +300,7 @@ func (r *Renderer) footer(img *image.RGBA, v MenuView, x0, y, innerW float64, px
 	ff := r.F.face(r.F.Regular, px(11.5))
 	foot := v.Footer
 	if foot == "" {
-		foot = "1–0 выбор  ·  Esc закрыть"
+		foot = i18n.T("1–0 выбор  ·  Esc закрыть")
 	}
 	fr := rect{x0, y, innerW, px(footerH)}
 	sep := rect{x0 + px(4), y, innerW - px(8), px(1)}

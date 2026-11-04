@@ -12,7 +12,7 @@ import (
 func TestDefaultAndOverride(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "config.json")
-	if created, err := EnsureFile(p); err != nil || !created {
+	if created, err := EnsureFile(p, "ru"); err != nil || !created {
 		t.Fatal(err)
 	}
 	c, err := Load(p)
@@ -41,9 +41,23 @@ func TestDefaultAndOverride(t *testing.T) {
 			}
 		}
 	}
+	// свои клавиши заменяют клавиши по умолчанию; при переходе на v5 добавляется только клавиша «Читалки»
 	os.WriteFile(p, []byte(`{"version":3,"ptt":{"key":"B","auto":true},"hotkeys":{"F9":"stop"}}`), 0o644)
 	c, err = Load(p)
-	if err != nil || c.PTT.Key != "B" || len(c.Hotkeys) != 1 || len(c.Dota.Reminders) != 7 {
+	if err != nil || c.PTT.Key != "B" || len(c.Hotkeys) != 2 || c.Hotkeys[ReaderKey] != "reader" || len(c.Dota.Reminders) != 7 {
+		t.Fatalf("%v %+v", err, c.Hotkeys)
+	}
+	os.WriteFile(p, []byte(`{"version":5,"hotkeys":{"F9":"stop"}}`), 0o644)
+	if c, err = Load(p); err != nil || len(c.Hotkeys) != 1 {
+		t.Fatalf("%v %+v", err, c.Hotkeys)
+	}
+	// клавиша занята или у читалки уже есть своя — не трогаем
+	os.WriteFile(p, []byte(`{"version":4,"hotkeys":{"Ctrl+Alt+R":"stop","F8":"menu"}}`), 0o644)
+	if c, err = Load(p); err != nil || len(c.Hotkeys) != 2 || c.Hotkeys["Ctrl+Alt+R"] != "stop" {
+		t.Fatalf("%v %+v", err, c.Hotkeys)
+	}
+	os.WriteFile(p, []byte(`{"version":4,"hotkeys":{"F7":"reader"}}`), 0o644)
+	if c, err = Load(p); err != nil || len(c.Hotkeys) != 1 {
 		t.Fatalf("%v %+v", err, c.Hotkeys)
 	}
 }

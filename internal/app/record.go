@@ -11,6 +11,7 @@ import (
 
 	"github.com/qwkejkqwje1/dota-voicebox/internal/config"
 	"github.com/qwkejkqwje1/dota-voicebox/internal/dsp"
+	"github.com/qwkejkqwje1/dota-voicebox/internal/i18n"
 	"github.com/qwkejkqwje1/dota-voicebox/internal/sounds"
 )
 
@@ -147,23 +148,7 @@ func (a *App) withVoiceFX(c sounds.Clip) sounds.Clip {
 			chains = append(chains, ch)
 		}
 	}
-	// полсекунды тишины в конце — чтобы не оборвать хвост эха
-	out := append(append(sounds.Clip(nil), c...), make(sounds.Clip, sr/2)...)
-	for i := 0; i < len(out); i += 480 { // блоками, как в аудиопотоке
-		b := out[i:min(i+480, len(out))]
-		for _, ch := range chains {
-			ch.Process(b)
-		}
-	}
-	n := len(out)
-	for n > len(c) && math.Abs(float64(out[n-1])) < 0.001 {
-		n--
-	}
-	out = out[:n]
-	for i, x := range out {
-		out[i] = max(-1, min(1, x))
-	}
-	return out
+	return runFX(c, chains)
 }
 
 // playPreview — послушать самому (как прозвучит на панели).
@@ -190,7 +175,7 @@ func (a *App) RecSave(name string, start, end float64, effect bool) (string, err
 		return "", err
 	}
 	if name = strings.TrimSpace(name); name == "" {
-		name = "Запись " + time.Now().Format("15:04")
+		name = i18n.T("Запись") + " " + time.Now().Format("15:04")
 	}
 	id, err := a.importSound(name, sounds.EncodeWAV16(c), ".wav", "🎙️")
 	if err != nil {

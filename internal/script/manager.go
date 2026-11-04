@@ -1,6 +1,7 @@
 package script
 
 import (
+	"bytes"
 	"embed"
 	"fmt"
 	"log"
@@ -15,10 +16,19 @@ import (
 
 	"github.com/qwkejkqwje1/dota-voicebox/internal/combo"
 	"github.com/qwkejkqwje1/dota-voicebox/internal/gameclock"
+	"github.com/qwkejkqwje1/dota-voicebox/internal/i18n"
 )
 
-//go:embed defaults/*.js
+//go:embed defaults/*.js defaults/en/*.js
 var defaults embed.FS
+
+// examplesDir — примеры скриптов на языке интерфейса: defaults (русские) или defaults/en.
+func examplesDir(en bool) string {
+	if en {
+		return "defaults/en"
+	}
+	return "defaults"
+}
 
 // Info — скрипт для интерфейса.
 type Info struct {
@@ -54,7 +64,7 @@ func NewManager(dir string, host Host) *Manager {
 	return m
 }
 
-// InstallDefaults кладёт примеры скриптов, если папки ещё нет.
+// InstallDefaults кладёт примеры скриптов (на языке интерфейса), если папки ещё нет.
 func (m *Manager) InstallDefaults() {
 	if _, err := os.Stat(m.Dir); err == nil {
 		return
@@ -63,11 +73,45 @@ func (m *Manager) InstallDefaults() {
 		log.Printf("скрипты: %v", err)
 		return
 	}
-	entries, _ := defaults.ReadDir("defaults")
+	dir := examplesDir(i18n.En())
+	entries, _ := defaults.ReadDir(dir)
 	for _, e := range entries {
-		b, _ := defaults.ReadFile("defaults/" + e.Name())
+		if e.IsDir() {
+			continue
+		}
+		b, _ := defaults.ReadFile(dir + "/" + e.Name())
 		os.WriteFile(filepath.Join(m.Dir, e.Name()), b, 0o644)
 	}
+}
+
+// SwapExamples — примеры, которые пользователь не менял, переписывает на другом языке
+// (язык выбрали в мастере первого запуска). Изменённые и свои скрипты не трогает.
+func (m *Manager) SwapExamples(en bool) {
+	from, to := examplesDir(!en), examplesDir(en)
+	entries, _ := defaults.ReadDir(from)
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		old, err1 := defaults.ReadFile(from + "/" + e.Name())
+		repl, err2 := defaults.ReadFile(to + "/" + e.Name())
+		cur, err3 := os.ReadFile(filepath.Join(m.Dir, e.Name()))
+		if err1 == nil && err2 == nil && err3 == nil && bytes.Equal(cur, old) {
+			os.WriteFile(filepath.Join(m.Dir, e.Name()), repl, 0o644)
+		}
+	}
+}
+
+// Example — встроенный пример скрипта по имени (на языке интерфейса).
+func Example(name string) (string, bool) {
+	if !ValidName(name) {
+		return "", false
+	}
+	b, err := defaults.ReadFile(examplesDir(i18n.En()) + "/" + name + ".js")
+	if err != nil {
+		b, err = defaults.ReadFile("defaults/" + name + ".js")
+	}
+	return string(b), err == nil
 }
 
 func (m *Manager) path(name string) string { return filepath.Join(m.Dir, name+".js") }

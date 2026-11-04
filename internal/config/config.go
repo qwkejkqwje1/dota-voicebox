@@ -8,12 +8,15 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/qwkejkqwje1/dota-voicebox/internal/audio"
 	"github.com/qwkejkqwje1/dota-voicebox/internal/dsp"
+	"github.com/qwkejkqwje1/dota-voicebox/internal/i18n"
 	"github.com/qwkejkqwje1/dota-voicebox/internal/sounds"
 	"github.com/qwkejkqwje1/dota-voicebox/internal/timers"
 )
@@ -22,7 +25,7 @@ import (
 var DefaultJSON []byte
 
 // Version — текущая версия формата конфига.
-const Version = 4
+const Version = 5
 
 type Config struct {
 	Version int `json:"version"`
@@ -65,6 +68,8 @@ type Config struct {
 	Hotkeys      map[string]string             `json:"hotkeys"`
 	QuickMenu    QuickMenu                     `json:"quick_menu"`
 	Wheel        Wheel                         `json:"wheel"`
+	Reader       Reader                        `json:"reader"`
+	UILang       string                        `json:"ui_lang"` // язык интерфейса: ru | en ("" — как в Windows)
 	Remote       Remote                        `json:"remote"`
 	Dota         Dota                          `json:"dota"`
 	Timers       []timers.Timer                `json:"timers,omitempty"` // v2; при миграции переезжают в dota.reminders
@@ -167,6 +172,28 @@ type Wheel struct {
 	Opacity float64  `json:"opacity"` // непрозрачность секторов (0.3–1)
 }
 
+// Reader — «Читалка»: набранный текст читает голос персонажа (голос Windows с обработкой).
+type Reader struct {
+	Voice  string     `json:"voice"`          // персонаж: sly — «Ехидный», vile — «Мерзкий», demon…
+	To     string     `json:"to"`             // кто слышит: both — команда и вы | voice — команда | monitor — только вы
+	Base   string     `json:"base,omitempty"` // голос Windows ("" — подбирать под персонажа)
+	Rate   int        `json:"rate,omitempty"` // поправка скорости речи -5..5
+	Volume float64    `json:"volume"`         // громкость 0.1..2
+	Chat   ChatReader `json:"chat"`
+}
+
+// ChatReader — чтение чата Dota 2 вслух (сообщения приходят через Game State Integration).
+type ChatReader struct {
+	Enabled bool   `json:"enabled"`
+	Voice   string `json:"voice,omitempty"` // "" — как у «Читалки»
+	To      string `json:"to"`              // кто слышит; обычно monitor — только вы
+	All     bool   `json:"all"`             // общий чат
+	Team    bool   `json:"team"`            // чат союзников
+	Own     bool   `json:"own"`             // свои сообщения
+	Wheel   bool   `json:"wheel"`           // фразы колеса чата
+	MaxLen  int    `json:"max_len"`         // длиннее — обрезается (символов)
+}
+
 // Remote — пульт с телефона: плитки звуков в браузере телефона по домашней сети (Wi-Fi).
 type Remote struct {
 	Enabled     bool   `json:"enabled"`
@@ -243,10 +270,6 @@ func Save(path string, c *Config) error {
 
 // Load читает конфиг; поверх значений по умолчанию.
 func Load(path string) (*Config, error) {
-	var c Config
-	if err := json.Unmarshal(DefaultJSON, &c); err != nil {
-		return nil, fmt.Errorf("встроенный конфиг: %w", err)
-	}
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -256,6 +279,12 @@ func Load(path string) (*Config, error) {
 	var probe map[string]json.RawMessage
 	if err := json.Unmarshal(b, &probe); err != nil {
 		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+	var lang string
+	json.Unmarshal(probe["ui_lang"], &lang)
+	var c Config
+	if err := json.Unmarshal(DefaultFor(lang), &c); err != nil {
+		return nil, fmt.Errorf("встроенный конфиг: %w", err)
 	}
 	if _, ok := probe["hotkeys"]; ok {
 		c.Hotkeys = nil
@@ -349,12 +378,56 @@ func Restore(path, name string) error {
 	return os.WriteFile(path, b, 0o644)
 }
 
-// EnsureFile создаёт config.json со значениями по умолчанию, если его нет.
-func EnsureFile(path string) (created bool, err error) {
+// EnsureFile создаёт config.json со значениями по умолчанию, если его нет. lang — язык интерфейса
+// (ru | en): у английского интерфейса и названия звуков, фразы и напоминания — по-английски.
+func EnsureFile(path, lang string) (created bool, err error) {
 	if _, err := os.Stat(path); err == nil {
 		return false, nil
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return false, err
 	}
-	return true, os.WriteFile(path, DefaultJSON, 0o644)
+	if lang != "en" {
+		lang = "ru"
+	}
+	b := uiLangRe.ReplaceAll(DefaultFor(lang), []byte(`"ui_lang": "`+lang+`"`))
+	return true, os.WriteFile(path, b, 0o644)
+}
+
+var uiLangRe = regexp.MustCompile(`"ui_lang":\s*"[^"]*"`)
+
+var (
+	enDefaultOnce sync.Once
+	enDefault     []byte
+)
+
+// DefaultFor — встроенный конфиг для языка интерфейса: для en строки переведены (разметка файла та же).
+func DefaultFor(lang string) []byte {
+	if lang != "en" {
+		return DefaultJSON
+	}
+	enDefaultOnce.Do(func() { enDefault = TranslateJSONText(DefaultJSON) })
+	return enDefault
+}
+
+var jsonStrRe = regexp.MustCompile(`"(?:[^"\\]|\\.)*"`)
+
+// TranslateJSONText переводит на английский строки JSON с русскими буквами, не трогая разметку.
+// "tts:текст" — переводится текст фразы.
+func TranslateJSONText(b []byte) []byte {
+	return jsonStrRe.ReplaceAllFunc(b, func(q []byte) []byte {
+		var s string
+		if json.Unmarshal(q, &s) != nil || !i18n.Cyrillic(s) {
+			return q
+		}
+		if t, ok := strings.CutPrefix(s, "tts:"); ok {
+			s = "tts:" + i18n.Translate(t)
+		} else {
+			s = i18n.Translate(s)
+		}
+		out, err := json.Marshal(s)
+		if err != nil {
+			return q
+		}
+		return out
+	})
 }

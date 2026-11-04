@@ -1,5 +1,6 @@
 // Быстрое меню поверх игры: включение, клавиша, вид (список, полоска, сетка), место на экране, состав.
 // Превью рисуется теми же размерами, что и настоящее меню (internal/overlay).
+import {_t, _tf} from '../i18n.js';
 import {app, h, act, kbd, keyLabel, bindKey, slider, seg, toggle, setrow, hint, playSound, api, toast, clone, select, icon} from '../core.js';
 import {padSounds, setNote} from './sounds.js';
 
@@ -13,37 +14,37 @@ const save = (m, opt = {}) => act('/api/menu', {menu: m}, opt);
 const clamp = (v, a, b) => Math.min(Math.max(v, a), b);
 
 const LAYOUTS = [
-  ['list', 'Список', 'Строки с подписями и клавишами'],
-  ['strip', 'Полоска', 'Плитки в один ряд — сверху или снизу экрана'],
-  ['grid', 'Сетка', 'Крупные плитки 5×2, как у стримеров'],
+  ['list', _t('Список'), _t('Строки с подписями и клавишами')],
+  ['strip', _t('Полоска'), _t('Плитки в один ряд — сверху или снизу экрана')],
+  ['grid', _t('Сетка'), _t('Крупные плитки 5×2, как у стримеров')],
 ];
-const SPOTS = [['top-left', 'Слева сверху'], ['top', 'Сверху'], ['top-right', 'Справа сверху'], ['left', 'Слева'], ['center', 'По центру'],
-  ['right', 'Справа'], ['bottom-left', 'Слева снизу'], ['bottom', 'Снизу'], ['bottom-right', 'Справа снизу']];
+const SPOTS = [['top-left', _t('Слева сверху')], ['top', _t('Сверху')], ['top-right', _t('Справа сверху')], ['left', _t('Слева')], ['center', _t('По центру')],
+  ['right', _t('Справа')], ['bottom-left', _t('Слева снизу')], ['bottom', _t('Снизу')], ['bottom-right', _t('Справа снизу')]];
 const KEYS_HINT = {
-  list: 'В игре: 1–0 или ↑ ↓ и Enter, ← → — страницы, Tab — голос, Backspace — стоп. Enter сразу после открытия — поиск по названию.',
-  strip: 'В игре: 1–0 или ← → и Enter, ↑ ↓ — страницы, Tab — голос, Backspace — стоп. Enter сразу после открытия — поиск по названию.',
-  grid: 'В игре: 1–0 или стрелки и Enter, PgUp PgDn — страницы, Tab — голос, Backspace — стоп. Enter сразу после открытия — поиск по названию.',
+  list: _t('В игре: 1–0 или ↑ ↓ и Enter, ← → — страницы, Tab — голос, Backspace — стоп. Enter сразу после открытия — поиск по названию.'),
+  strip: _t('В игре: 1–0 или ← → и Enter, ↑ ↓ — страницы, Tab — голос, Backspace — стоп. Enter сразу после открытия — поиск по названию.'),
+  grid: _t('В игре: 1–0 или стрелки и Enter, PgUp PgDn — страницы, Tab — голос, Backspace — стоп. Enter сразу после открытия — поиск по названию.'),
 };
 
 export default function menuPage() {
   const m = qm(), menu = app.state.menu, key = menu.menu_key;
   const lay = m.layout || 'list';
   const top = h('div', {class: 'card'},
-    setrow('Меню поверх игры', 'Открывается клавишей прямо в игре: звуки и эффекты голоса — цифрами 1–0, мышью или колёсиком.',
-      toggle(m.enabled, v => { m.enabled = v; save(m, {ok: v ? '⚡ Быстрое меню включено' : 'Быстрое меню выключено'}); }, {big: true})),
+    setrow(_t('Меню поверх игры'), _t('Открывается клавишей прямо в игре: звуки и эффекты голоса — цифрами 1–0, мышью или колёсиком.'),
+      toggle(m.enabled, v => { m.enabled = v; save(m, {ok: v ? _t('⚡ Быстрое меню включено') : _t('Быстрое меню выключено')}); }, {big: true})),
     m.enabled ? [
-      setrow('Клавиша вызова', 'Нажмите в игре — меню появится, ещё раз — скроется. Esc — закрыть.',
-        kbd(key, {onclick: () => bindKey('menu', {title: 'Клавиша быстрого меню', hint: 'Удобно: Alt+~, F1–F12 или клавиша на цифровом блоке. Клавиша не мешает игре — VoiceBox её только слушает.'}), empty: 'назначить'})),
-      setrow('🔎 Поиск и фраза команде', 'Меню откроется сразу с поиском: напечатайте название звука или эффекта и нажмите Enter. Ctrl+Enter — напечатанную фразу озвучит голос Windows, её услышит команда. То же — Enter в открытом меню.',
-        kbd(app.state.hotkeys && app.state.hotkeys.say, {onclick: () => bindKey('say', {title: 'Клавиша поиска и фраз', hint: 'Например, Alt+Enter или F9. Пока поиск открыт, всё, что вы печатаете, попадает в него, а не в игру.'}), empty: 'назначить'})),
+      setrow(_t('Клавиша вызова'), _t('Нажмите в игре — меню появится, ещё раз — скроется. Esc — закрыть.'),
+        kbd(key, {onclick: () => bindKey('menu', {title: _t('Клавиша быстрого меню'), hint: _t('Удобно: Alt+~, F1–F12 или клавиша на цифровом блоке. Клавиша не мешает игре — VoiceBox её только слушает.')}), empty: _t('назначить')})),
+      setrow(_t('🔎 Поиск и фраза команде'), _t('Меню откроется сразу с поиском: напечатайте название звука или эффекта и нажмите Enter. Ctrl+Enter — напечатанную фразу озвучит голос Windows, её услышит команда. То же — Enter в открытом меню.'),
+        kbd(app.state.hotkeys && app.state.hotkeys.say, {onclick: () => bindKey('say', {title: _t('Клавиша поиска и фраз'), hint: _t('Например, Alt+Enter или F9. Пока поиск открыт, всё, что вы печатаете, попадает в него, а не в игру.')}), empty: _t('назначить')})),
       h('div', {class: 'row', style: 'padding-top:12px;border-top:1px solid var(--line)'},
-        h('button', {class: 'btn primary', onclick: () => act('/api/menu/preview', {}, {ok: 'Меню открыто — посмотрите на экран'})}, '▶ Показать сейчас'),
-        h('span', {class: 'hint'}, 'Откроется по-настоящему, поверх всех окон.'))] : null);
+        h('button', {class: 'btn primary', onclick: () => act('/api/menu/preview', {}, {ok: _t('Меню открыто — посмотрите на экран')})}, _t('▶ Показать сейчас')),
+        h('span', {class: 'hint'}, _t('Откроется по-настоящему, поверх всех окон.')))] : null);
   if (!m.enabled) {
     return h('div', {class: 'grid2', style: 'grid-template-columns:minmax(380px,1.1fr) minmax(360px,.9fr)'}, h('div', {class: 'stack'}, top),
       h('div', {style: 'position:sticky;top:0'}, previewCard(m, menu)));
   }
-  const tip = hint(['🖥️ Меню видно поверх игр в режиме экрана ', h('b', {}, '«Оконный без рамки»'), ' (в Dota 2: Настройки → Видео → «Окно без рамки»). В эксклюзивном полноэкранном режиме Windows не даёт рисовать поверх игры — звуки по клавишам при этом работают.'], 'accent');
+  const tip = hint([_t('🖥️ Меню видно поверх игр в режиме экрана '), h('b', {}, _t('«Оконный без рамки»')), _t(' (в Dota 2: Настройки → Видео → «Окно без рамки»). В эксклюзивном полноэкранном режиме Windows не даёт рисовать поверх игры — звуки по клавишам при этом работают.')], 'accent');
   const look = [layoutCard(m), placeCard(m, menu), behaviorCard(m)];
   const content = [soundsCard(m), effectsCard(m)];
   if (lay !== 'list') { // широкое превью — над настройками
@@ -64,14 +65,14 @@ function layIcon(id) {
 }
 function layoutCard(m) {
   const cur = m.layout || 'list';
-  return h('div', {class: 'card'}, h('h3', {}, '🎨 Вид'),
+  return h('div', {class: 'card'}, h('h3', {}, _t('🎨 Вид')),
     h('div', {class: 'lays'}, LAYOUTS.map(([id, title, desc]) => h('button', {type: 'button', class: 'lay' + (cur === id ? ' on' : ''), onclick: () => {
       if (cur === id) return;
       m.layout = id;
       let ok = title;
       if (id === 'strip' && ['center', 'left', 'right'].includes(m.position)) { // полоска посреди экрана неудобна
         m.position = 'top';
-        ok = 'Полоска — сверху экрана. Место можно поменять ниже';
+        ok = _t('Полоска — сверху экрана. Место можно поменять ниже');
       }
       save(m, {ok});
     }}, layIcon(id), h('b', {}, title), h('small', {}, desc)))));
@@ -108,15 +109,15 @@ function placeMock(pos, x, y, pw, ph, SW, SH, sc) {
 function placeCard(m, menu) {
   const atCursor = m.position === 'cursor';
   return h('div', {class: 'card', id: 'qmPlace'},
-    h('div', {class: 'card-h'}, h('h3', {}, '📍 Где появляется'), h('div', {class: 'grow'}),
-      seg([['screen', '📌 Своё место'], ['cursor', '🖱 У курсора']], atCursor ? 'cursor' : 'screen', v => {
+    h('div', {class: 'card-h'}, h('h3', {}, _t('📍 Где появляется')), h('div', {class: 'grow'}),
+      seg([['screen', _t('📌 Своё место')], ['cursor', _t('🖱 У курсора')]], atCursor ? 'cursor' : 'screen', v => {
         m.position = v === 'cursor' ? 'cursor' : (m.layout === 'strip' ? 'top' : 'center');
         save(m);
       })),
     screenMap(m, menu),
-    h('p', {class: 'hint', style: 'margin:8px 0 12px'}, atCursor ? 'Меню появится там, где сейчас курсор мыши.'
-      : ['Перетащите меню на схеме — или прямо в игре: за ', h('span', {class: 'q-grip inl'}), ' или за фон меню. Точки — готовые места. Серым — где обычно интерфейс игры.']),
-    setrow('Монитор', 'Если мониторов несколько', select([['game', '🎮 Где игра'], ['cursor', '🖱 Где курсор мыши'], ['primary', '🖥️ Основной']],
+    h('p', {class: 'hint', style: 'margin:8px 0 12px'}, atCursor ? _t('Меню появится там, где сейчас курсор мыши.')
+      : [_t('Перетащите меню на схеме — или прямо в игре: за '), h('span', {class: 'q-grip inl'}), _t(' или за фон меню. Точки — готовые места. Серым — где обычно интерфейс игры.')]),
+    setrow(_t('Монитор'), _t('Если мониторов несколько'), select([['game', _t('🎮 Где игра')], ['cursor', _t('🖱 Где курсор мыши')], ['primary', _t('🖥️ Основной')]],
       m.monitor || 'game', v => { m.monitor = v; save(m, {render: false}); })));
 }
 function screenMap(m, menu) {
@@ -128,7 +129,7 @@ function screenMap(m, menu) {
   const pct = (v, of) => (v / of * 100).toFixed(3) + '%';
   const atCursor = m.position === 'cursor';
   const n = lay === 'list' ? Math.min(6, Math.max(2, (menu.sounds || []).length)) : Math.min(PAGE, Math.max(1, Math.min(PAGE, Math.max((menu.sounds || []).length, (menu.effects || []).length))));
-  const mock = h('div', {class: 'scr-menu ' + lay, title: atCursor ? '' : 'Перетащите', style: {left: pct(x, SW), top: pct(y, SH), width: pct(pw, SW), height: pct(ph, SH)}},
+  const mock = h('div', {class: 'scr-menu ' + lay, title: atCursor ? '' : _t('Перетащите'), style: {left: pct(x, SW), top: pct(y, SH), width: pct(pw, SW), height: pct(ph, SH)}},
     Array.from({length: lay === 'grid' ? 10 : n}, () => h('i')));
   const box = h('div', {class: 'scr' + (atCursor ? ' cur' : ''), style: {'aspect-ratio': SW + ' / ' + SH}},
     h('i', {class: 'hud top'}), h('i', {class: 'hud map'}), h('i', {class: 'hud bar'}), h('i', {class: 'scr-guide'}), mock,
@@ -173,7 +174,7 @@ function screenMap(m, menu) {
         m.position = 'custom';
         m.x = Math.round(fx * 1000) / 1000;
         m.y = Math.round(fy * 1000) / 1000;
-        save(m, {ok: '📍 Запомнено — здесь меню и появится'});
+        save(m, {ok: _t('📍 Запомнено — здесь меню и появится')});
       };
       mock.addEventListener('pointermove', move);
       mock.addEventListener('pointerup', up, {once: true});
@@ -185,16 +186,16 @@ function screenMap(m, menu) {
 
 // ---------- поведение ----------
 function behaviorCard(m) {
-  return h('div', {class: 'card'}, h('h3', {}, '⚙️ Поведение'),
+  return h('div', {class: 'card'}, h('h3', {}, _t('⚙️ Поведение')),
     h('div', {class: 'grid2', style: 'grid-template-columns:1fr 1fr;gap:12px 24px'},
-      slider({label: 'Размер', value: m.scale || 1, min: 0.8, max: 1.6, step: 0.05, fmt: v => Math.round(v * 100) + '%',
+      slider({label: _t('Размер'), value: m.scale || 1, min: 0.8, max: 1.6, step: 0.05, fmt: v => Math.round(v * 100) + '%',
         onInput: v => { m.scale = v; live(m); }, onChange: v => { m.scale = v; save(m, {render: false}); }}),
-      slider({label: 'Прозрачность фона', value: Math.round((1 - (m.opacity || 0.95)) * 100) / 100, min: 0, max: 0.7, step: 0.05, fmt: v => Math.round(v * 100) + '%',
-        title: 'Насколько сквозь меню видно игру. Надписи остаются чёткими.',
+      slider({label: _t('Прозрачность фона'), value: Math.round((1 - (m.opacity || 0.95)) * 100) / 100, min: 0, max: 0.7, step: 0.05, fmt: v => Math.round(v * 100) + '%',
+        title: _t('Насколько сквозь меню видно игру. Надписи остаются чёткими.'),
         onInput: v => { m.opacity = 1 - v; live(m); }, onChange: v => { m.opacity = Math.round((1 - v) * 100) / 100; save(m, {render: false}); }}),
-      slider({label: 'Само закроется через', value: m.timeout_sec || 0, min: 0, max: 30, step: 1, fmt: v => v ? v + ' с' : 'не закрывать',
+      slider({label: _t('Само закроется через'), value: m.timeout_sec || 0, min: 0, max: 30, step: 1, fmt: v => v ? v + _t(' с') : _t('не закрывать'),
         onChange: v => { m.timeout_sec = v; save(m, {render: false}); }})),
-    h('div', {class: 'mt'}, toggle(m.close_after_pick, v => { m.close_after_pick = v; save(m, {render: false}); }, {label: 'Закрывать после выбора звука'})));
+    h('div', {class: 'mt'}, toggle(m.close_after_pick, v => { m.close_after_pick = v; save(m, {render: false}); }, {label: _t('Закрывать после выбора звука')})));
 }
 // live — перерисовать превью и схему, пока тянут ползунок (сохранится, когда отпустят).
 function live(m) {
@@ -207,7 +208,7 @@ function live(m) {
 // ---------- состав ----------
 function row(s, i, actions) {
   return h('div', {class: 'pick on', style: 'cursor:default'},
-    i != null ? h('span', {class: 'num', title: 'Страница ' + (Math.floor(i / PAGE) + 1)}, KEYS[i % PAGE]) : null,
+    i != null ? h('span', {class: 'num', title: _t('Страница ') + (Math.floor(i / PAGE) + 1)}, KEYS[i % PAGE]) : null,
     h('span', {class: 'pe'}, s.emoji || '🔊'), h('span', {class: 'ell grow'}, s.title || s.label), s.hotkey ? kbd(s.hotkey) : null, actions);
 }
 function soundsCard(m) {
@@ -217,19 +218,19 @@ function soundsCard(m) {
   const items = (m.items || []).filter(id => byId.has(id));
   const setItems = list => { m.items = list; save(m); };
   return h('div', {class: 'card'},
-    setNote('в меню его звуки по порядку панели. Выбор ниже вернётся, когда включите «Все звуки».'),
-    h('div', {class: 'card-h'}, h('h3', {}, '🔊 Звуки в меню'), h('div', {class: 'grow'}),
-      seg([['auto', 'Первые с панели'], ['manual', 'Выбрать самому']], manual ? 'manual' : 'auto', v => {
+    setNote(_t('в меню его звуки по порядку панели. Выбор ниже вернётся, когда включите «Все звуки».')),
+    h('div', {class: 'card-h'}, h('h3', {}, _t('🔊 Звуки в меню')), h('div', {class: 'grow'}),
+      seg([['auto', _t('Первые с панели')], ['manual', _t('Выбрать самому')]], manual ? 'manual' : 'auto', v => {
         if (v === 'auto') setItems([]);
         else setItems(pad.slice(0, PAGE).map(s => s.id));
       })),
-    !manual ? h('p', {class: 'hint', style: 'margin:0'}, 'В меню попадают первые ' + 2 * PAGE + ' плиток со страницы «Звуки» в том же порядке (две страницы по 10). Порядок меняется перетаскиванием плиток.')
-      : [h('div', {class: 'flabel', style: 'margin-bottom:6px'}, 'В меню · ' + items.length),
+    !manual ? h('p', {class: 'hint', style: 'margin:0'}, _t('В меню попадают первые ') + 2 * PAGE + _t(' плиток со страницы «Звуки» в том же порядке (две страницы по 10). Порядок меняется перетаскиванием плиток.'))
+      : [h('div', {class: 'flabel', style: 'margin-bottom:6px'}, _t('В меню · ') + items.length),
         items.length ? h('div', {class: 'pick-list', style: 'max-height:none'}, items.map((id, i) => row(byId.get(id), i, h('div', {class: 'row nowrap', style: 'gap:2px'},
-          h('button', {class: 'btn sm icon ghost', title: 'Выше', disabled: i === 0, onclick: () => { const l = items.slice(); [l[i - 1], l[i]] = [l[i], l[i - 1]]; setItems(l); }}, '↑'),
-          h('button', {class: 'btn sm icon ghost', title: 'Ниже', disabled: i === items.length - 1, onclick: () => { const l = items.slice(); [l[i + 1], l[i]] = [l[i], l[i + 1]]; setItems(l); }}, '↓'),
-          h('button', {class: 'btn sm icon ghost', title: 'Убрать из меню', onclick: () => { const l = items.filter(x => x !== id); setItems(l.length ? l : []); }}, icon('x', 14)))))) : null,
-        pad.length > items.length ? [h('div', {class: 'flabel', style: 'margin:14px 0 6px'}, 'Добавить'),
+          h('button', {class: 'btn sm icon ghost', title: _t('Выше'), disabled: i === 0, onclick: () => { const l = items.slice(); [l[i - 1], l[i]] = [l[i], l[i - 1]]; setItems(l); }}, '↑'),
+          h('button', {class: 'btn sm icon ghost', title: _t('Ниже'), disabled: i === items.length - 1, onclick: () => { const l = items.slice(); [l[i + 1], l[i]] = [l[i], l[i + 1]]; setItems(l); }}, '↓'),
+          h('button', {class: 'btn sm icon ghost', title: _t('Убрать из меню'), onclick: () => { const l = items.filter(x => x !== id); setItems(l.length ? l : []); }}, icon('x', 14)))))) : null,
+        pad.length > items.length ? [h('div', {class: 'flabel', style: 'margin:14px 0 6px'}, _t('Добавить')),
           h('div', {class: 'pick-list', style: 'max-height:260px'}, pad.filter(s => !items.includes(s.id)).map(s =>
             h('div', {class: 'pick', onclick: () => setItems(items.concat(s.id))}, h('span', {class: 'pe'}, s.emoji || '🔊'), h('span', {class: 'ell grow'}, s.title), h('span', {class: 'faint'}, '＋'))))] : null]);
 }
@@ -238,13 +239,13 @@ function effectsCard(m) {
   const cur = (m.effects && m.effects.length ? m.effects : app.state.menu.effects.map(e => e.id));
   const sel = new Set(cur);
   return h('div', {class: 'card'},
-    setrow('🎭 Вкладка «Голос»', 'Переключать эффекты голоса прямо в игре: Tab в меню.', toggle(m.show_effects, v => { m.show_effects = v; save(m); })),
+    setrow(_t('🎭 Вкладка «Голос»'), _t('Переключать эффекты голоса прямо в игре: Tab в меню.'), toggle(m.show_effects, v => { m.show_effects = v; save(m); })),
     m.show_effects ? h('div', {class: 'pick-list', style: 'max-height:300px;margin-top:6px'}, presets.map(p => {
       const on = sel.has(p.id);
       const idx = cur.indexOf(p.id);
       return h('div', {class: 'pick' + (on ? ' on' : ''), onclick: () => {
         const next = on ? cur.filter(x => x !== p.id) : presets.map(x => x.id).filter(x => sel.has(x) || x === p.id);
-        if (!next.length) { toast('Нужен хотя бы один эффект', 'err'); return; }
+        if (!next.length) { toast(_t('Нужен хотя бы один эффект'), 'err'); return; }
         m.effects = next; save(m);
       }}, h('span', {class: 'num'}, on ? KEYS[idx % PAGE] : ''), h('span', {class: 'pe'}, p.emoji || '🎛️'), h('span', {class: 'ell grow'}, p.title),
       p.hotkey ? kbd(p.hotkey) : null);
@@ -253,16 +254,16 @@ function effectsCard(m) {
 
 // ---------- превью ----------
 function footerText(layout, pages, effects) { // как overlay.Footer
-  const parts = ['1–0 выбор'];
-  if (pages > 1) parts.push((layout === 'grid' ? 'PgUp PgDn' : '← →') + ' стр.');
-  if (effects) parts.push('Tab голос');
-  parts.push('Enter поиск');
-  if (pages <= 1 && !effects) parts.push('Backspace стоп');
+  const parts = [_t('1–0 выбор')];
+  if (pages > 1) parts.push((layout === 'grid' ? 'PgUp PgDn' : '← →') + _t(' стр.'));
+  if (effects) parts.push(_t('Tab голос'));
+  parts.push(_t('Enter поиск'));
+  if (pages <= 1 && !effects) parts.push(_t('Backspace стоп'));
   parts.push('Esc');
   return parts.join('  ·  ');
 }
 function previewData(menu) {
-  const tabs = ['Звуки'].concat(menu.effects && menu.effects.length ? ['Голос'] : []);
+  const tabs = [_t('Звуки')].concat(menu.effects && menu.effects.length ? [_t('Голос')] : []);
   if (previewTab >= tabs.length) previewTab = 0;
   const all = previewTab === 0 ? (menu.sounds || []) : (menu.effects || []);
   const pages = Math.max(1, Math.ceil(all.length / PAGE));
@@ -277,20 +278,20 @@ function tileEl(it, i, big, pick) {
     h('span', {class: 'k'}, KEYS[i]), it.active ? bars() : null,
     h('span', {class: 'e', style: {background: (it.color || '#8b5cf6') + '46'}}, it.emoji || '🔊'),
     h('span', {class: 'l'}, it.label),
-    big ? h('span', {class: 'hk'}, it.pending ? 'готовится…' : it.key ? keyLabel(it.key) : '') : null);
+    big ? h('span', {class: 'hk'}, it.pending ? _t('готовится…') : it.key ? keyLabel(it.key) : '') : null);
 }
 function head(d, setTab, flip) {
   const pageLabel = d.pages > 1 ? '  ' + (previewPage + 1) + '/' + d.pages : '';
   return h('div', {class: 'qm-head'},
     d.tabs.length > 1 ? h('div', {class: 'qm-tabs'}, d.tabs.map((t, i) => h('span', {class: i === previewTab ? 'on' : '',
-      title: i === previewTab && d.pages > 1 ? 'Следующая страница' : null,
+      title: i === previewTab && d.pages > 1 ? _t('Следующая страница') : null,
       onclick: () => i === previewTab ? (d.pages > 1 && flip(1)) : setTab(i)}, t + (i === previewTab ? pageLabel : ''))))
-      : h('div', {class: 'qm-title', onclick: () => d.pages > 1 && flip(1)}, (d.tabs[0] || 'Быстрое меню').toUpperCase() + pageLabel),
-    h('span', {class: 'q-grip', title: 'В игре за эту ручку меню можно перетащить'}));
+      : h('div', {class: 'qm-title', onclick: () => d.pages > 1 && flip(1)}, (d.tabs[0] || _t('Быстрое меню')).toUpperCase() + pageLabel),
+    h('span', {class: 'q-grip', title: _t('В игре за эту ручку меню можно перетащить')}));
 }
 const emptyText = () => { // как overlay: Data.Empty
   const c = app.state.config, s = (c.sets || []).find(x => x.id === c.active_set);
-  return s ? 'В наборе «' + s.name + '» нет звуков · Enter — поиск' : 'Звуков пока нет — добавьте их в VoiceBox';
+  return s ? _tf('В наборе «{0}» нет звуков · Enter — поиск', s.name) : _t('Звуков пока нет — добавьте их в VoiceBox');
 };
 function listPrev(d, m, pick, setTab, flip) {
   return h('div', {class: 'qm', style: {'--op': m.opacity || 0.95}},
@@ -304,12 +305,12 @@ function listPrev(d, m, pick, setTab, flip) {
 function stripPrev(d, m, pick, setTab, flip) {
   const n = Math.max(d.slots, d.items.length);
   return h('div', {class: 'qms', style: {'--op': m.opacity || 0.95}},
-    h('span', {class: 'q-grip', title: 'В игре за эту ручку меню можно перетащить'}),
+    h('span', {class: 'q-grip', title: _t('В игре за эту ручку меню можно перетащить')}),
     d.tabs.length > 1 ? h('div', {class: 'qs-tabs'}, d.tabs.map((t, i) => h('span', {class: i === previewTab ? 'on' : '', onclick: () => setTab(i)}, t))) : null,
     n ? h('div', {class: 'qs-tiles'}, Array.from({length: n}, (_, i) => d.items[i] ? tileEl(d.items[i], i, false, pick) : h('div', {class: 'qt slot'})))
       : h('div', {class: 'qs-empty'}, emptyText()),
-    d.pages > 1 ? h('div', {class: 'qs-pages'}, h('button', {type: 'button', title: 'Прошлая страница', onclick: () => flip(-1)}, '▲'),
-      h('span', {}, (previewPage + 1) + '/' + d.pages), h('button', {type: 'button', title: 'Следующая страница', onclick: () => flip(1)}, '▼')) : null);
+    d.pages > 1 ? h('div', {class: 'qs-pages'}, h('button', {type: 'button', title: _t('Прошлая страница'), onclick: () => flip(-1)}, '▲'),
+      h('span', {}, (previewPage + 1) + '/' + d.pages), h('button', {type: 'button', title: _t('Следующая страница'), onclick: () => flip(1)}, '▼')) : null);
 }
 function gridPrev(d, m, pick, setTab, flip) {
   const n = Math.max(d.slots, d.items.length), rows = Math.max(1, Math.ceil(n / 5));
@@ -341,9 +342,9 @@ function previewCard(m, menu) {
   const el = (lay === 'strip' ? stripPrev : lay === 'grid' ? gridPrev : listPrev)(d, m, pick, setTab, flip);
   fitZoom(el, panelSize(lay, menu)[0] + 2, m.scale || 1, lay === 'list' ? 1.25 : 1.4);
   return h('div', {class: 'card', id: 'qmPrev'},
-    h('div', {class: 'card-h'}, h('h3', {}, 'Так выглядит в игре'), h('div', {class: 'grow'}), menu.menu_key ? kbd(menu.menu_key) : null),
+    h('div', {class: 'card-h'}, h('h3', {}, _t('Так выглядит в игре')), h('div', {class: 'grow'}), menu.menu_key ? kbd(menu.menu_key) : null),
     h('div', {class: 'qm-wrap', style: m.enabled ? '' : 'opacity:.45;filter:grayscale(.6)'}, el),
     h('p', {class: 'hint', style: 'margin:10px 0 0'},
-      previewTab === 0 ? '🎧 Нажмите на ' + (lay === 'list' ? 'строку' : 'плитку') + ' — звук прозвучит только у вас. ' : 'Нажмите — эффект включится, как в игре. ',
+      previewTab === 0 ? _t('🎧 Нажмите на ') + (lay === 'list' ? _t('строку') : _t('плитку')) + _t(' — звук прозвучит только у вас. ') : _t('Нажмите — эффект включится, как в игре. '),
       KEYS_HINT[lay] || KEYS_HINT.list));
 }

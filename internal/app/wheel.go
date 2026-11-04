@@ -1,9 +1,11 @@
 package app
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/qwkejkqwje1/dota-voicebox/internal/config"
+	"github.com/qwkejkqwje1/dota-voicebox/internal/i18n"
 	"github.com/qwkejkqwje1/dota-voicebox/internal/sounds"
 )
 
@@ -11,7 +13,7 @@ import (
 
 // WheelItem — сектор колеса.
 type WheelItem struct {
-	Act     string `json:"act"` // sound:<id> | preset:<id> | stop | mic_mute; "" — пусто
+	Act     string `json:"act"` // sound:<id> | preset:<id> | stop | mic_mute | reader[:repeat|:stop|:next] | chat_read; "" — пусто
 	Label   string `json:"label,omitempty"`
 	Emoji   string `json:"emoji,omitempty"`
 	Color   string `json:"color,omitempty"`
@@ -72,11 +74,22 @@ func (a *App) Wheel() Wheel {
 			it.Label, it.Emoji = PresetTitle(id)
 			it.Color, it.Active = "#8b5cf6", id == cur
 		case act == "stop":
-			it.Label, it.Emoji, it.Color = "Стоп", "⏹️", "#ef4444"
+			it.Label, it.Emoji, it.Color = i18n.T("Стоп"), "⏹️", "#ef4444"
+		case act == "reader":
+			it.Label, it.Emoji, it.Color = i18n.T("Читалка"), "🎭", "#0ea5e9"
+		case act == "reader:repeat":
+			it.Label, it.Emoji, it.Color = i18n.T("Повторить фразу"), "🔁", "#0ea5e9"
+		case act == "reader:stop":
+			it.Label, it.Emoji, it.Color = i18n.T("Замолчать"), "🤐", "#64748b"
+		case act == "reader:next":
+			v := readerVoice("", cfg)
+			it.Label, it.Emoji, it.Color = fmt.Sprintf(i18n.T("Голос: %s"), i18n.T(v.Title)), v.Emoji, "#0ea5e9"
+		case act == "chat_read":
+			it.Label, it.Emoji, it.Color, it.Active = i18n.T("Чтение чата"), "💬", "#0ea5e9", cfg.Reader.Chat.Enabled
 		case act == "mic_mute":
-			it.Label, it.Emoji, it.Color = "Выключить микрофон", "🎙️", "#22c55e"
+			it.Label, it.Emoji, it.Color = i18n.T("Выключить микрофон"), "🎙️", "#22c55e"
 			if cfg.Mic.Mute {
-				it.Label, it.Emoji, it.Color, it.Active = "Включить микрофон", "🔇", "#ef4444", true
+				it.Label, it.Emoji, it.Color, it.Active = i18n.T("Включить микрофон"), "🔇", "#ef4444", true
 			}
 		default:
 			it.Missing, it.Label = true, act
@@ -94,7 +107,8 @@ func (a *App) WheelPick(act string) {
 		a.MenuPick("sound", strings.TrimPrefix(act, "sound:"))
 	case strings.HasPrefix(act, "preset:"):
 		a.SetPreset(strings.TrimPrefix(act, "preset:"), true)
-	case act == "stop", act == "mic_mute":
+	case act == "stop", act == "mic_mute", act == "reader", act == "reader:repeat", act == "reader:stop",
+		act == "reader:next", act == "chat_read":
 		a.Do(act)
 	}
 }

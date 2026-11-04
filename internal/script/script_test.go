@@ -10,6 +10,7 @@ import (
 
 	"github.com/qwkejkqwje1/dota-voicebox/internal/combo"
 	"github.com/qwkejkqwje1/dota-voicebox/internal/gameclock"
+	"github.com/qwkejkqwje1/dota-voicebox/internal/i18n"
 )
 
 type fakeHost struct {
@@ -23,7 +24,11 @@ func (h *fakeHost) Play(ref, to string, v float64) error {
 	h.rec("play:" + ref + "@" + to)
 	return nil
 }
-func (h *fakeHost) Say(t, to string) error   { h.rec("say:" + t + "@" + to); return nil }
+func (h *fakeHost) Say(t, to string) error { h.rec("say:" + t + "@" + to); return nil }
+func (h *fakeHost) Read(t, to, v string) error {
+	h.rec("read:" + t + "@" + to + "/" + v)
+	return nil
+}
 func (h *fakeHost) Stop(ref string)          { h.rec("stop:" + ref) }
 func (h *fakeHost) SetPreset(n string) error { h.rec("preset:" + n); return nil }
 func (h *fakeHost) Preset() string           { return "clean" }
@@ -53,18 +58,59 @@ func setup(t *testing.T, code string) (*Manager, *fakeHost) {
 }
 
 func TestDefaultsCompile(t *testing.T) {
-	entries, _ := defaults.ReadDir("defaults")
-	if len(entries) == 0 {
+	n := map[string]int{}
+	for _, dir := range []string{examplesDir(false), examplesDir(true)} {
+		entries, _ := defaults.ReadDir(dir)
+		for _, e := range entries {
+			if e.IsDir() {
+				continue
+			}
+			n[e.Name()]++
+			b, _ := defaults.ReadFile(dir + "/" + e.Name())
+			if dir == examplesDir(true) && i18n.Cyrillic(string(b)) {
+				t.Errorf("%s/%s: русские буквы в английском примере", dir, e.Name())
+			}
+			h := &fakeHost{}
+			s := newScript(e.Name(), string(b), h)
+			if err := s.start(); err != nil {
+				t.Fatalf("%s/%s: %v", dir, e.Name(), err)
+			}
+			s.close()
+		}
+	}
+	if len(n) == 0 {
 		t.Fatal("no defaults")
 	}
-	for _, e := range entries {
-		b, _ := defaults.ReadFile("defaults/" + e.Name())
-		h := &fakeHost{}
-		s := newScript(e.Name(), string(b), h)
-		if err := s.start(); err != nil {
-			t.Fatalf("%s: %v", e.Name(), err)
+	for name, c := range n {
+		if c != 2 {
+			t.Errorf("%s: пример должен быть и по-русски, и по-английски", name)
 		}
-		s.close()
+	}
+}
+
+// Смена языка в мастере: нетронутые примеры — на новом языке, изменённые остаются как есть.
+func TestSwapExamples(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "scripts")
+	m := NewManager(dir, &fakeHost{})
+	t.Cleanup(m.Close)
+	m.InstallDefaults() // язык по умолчанию — русский
+	mine := filepath.Join(dir, "my_timings.js")
+	os.WriteFile(mine, []byte("// моё\n"), 0o644)
+	m.SwapExamples(true)
+	en, _ := defaults.ReadFile("defaults/en/chat_reader.js")
+	if b, _ := os.ReadFile(filepath.Join(dir, "chat_reader.js")); string(b) != string(en) {
+		t.Errorf("chat_reader.js не переведён: %.60q", b)
+	}
+	if b, _ := os.ReadFile(mine); string(b) != "// моё\n" {
+		t.Errorf("изменённый пример переписан: %q", b)
+	}
+	m.SwapExamples(false)
+	ru, _ := defaults.ReadFile("defaults/chat_reader.js")
+	if b, _ := os.ReadFile(filepath.Join(dir, "chat_reader.js")); string(b) != string(ru) {
+		t.Errorf("chat_reader.js не вернулся на русский: %.60q", b)
+	}
+	if code, ok := Example("chat_reader"); !ok || code != string(ru) {
+		t.Errorf("Example: %v %.40q", ok, code)
 	}
 }
 
@@ -148,5 +194,22 @@ func TestParseTime(t *testing.T) {
 		if got, err := ParseTime(in); err != nil || got != want {
 			t.Fatalf("%v → %d %v", in, got, err)
 		}
+	}
+}
+
+func TestChatRead(t *testing.T) {
+	m, h := setup(t, `on("chat", (m) => {
+  if (m.own || m.wheel) return;
+  read(m.ally ? "свои: " + m.text : m.text, { voice: m.ally ? "announcer" : "vile", to: "me" });
+});
+say("ехидно", { voice: "sly" });`)
+	wait(t, h, "read:ехидно@team/sly")
+	m.Event("chat", map[string]any{"text": "я свой", "own": true, "ally": true})
+	m.Event("chat", map[string]any{"text": "▶ gg", "wheel": true})
+	m.Event("chat", map[string]any{"text": "мид ss", "ally": true, "channel": "team"})
+	m.Event("chat", map[string]any{"text": "hi", "ally": false, "channel": "all"})
+	wait(t, h, "read:hi@me/vile")
+	if l := h.list(); !strings.Contains(l, "read:свои: мид ss@me/announcer") || strings.Contains(l, "я свой") || strings.Contains(l, "gg") {
+		t.Fatalf("чат: %s", l)
 	}
 }

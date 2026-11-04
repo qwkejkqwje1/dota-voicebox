@@ -284,6 +284,8 @@ button.chip:hover { background: var(--card2); }
 .micbar { display: grid; grid-template-columns: auto 1fr auto; gap: 16px; align-items: center; }
 .micicon { width: 48px; height: 48px; border-radius: 14px; display: grid; place-items: center; font-size: 24px; background: rgba(255, 255, 255, .05); }
 .micicon.muted { background: var(--bad-bg); }
+.mic-sel { width: auto; flex: 0 1 340px; min-width: 120px; text-overflow: ellipsis; }
+.micbar + .hint.box { margin: 12px 0 0; }
 .big-meter { height: 12px; border-radius: 6px; }
 .big-meter i { border-radius: 6px; }
 canvas.viz { width: 100%; height: 260px; display: block; border-radius: 10px; background: #0b0c10; cursor: ns-resize; }

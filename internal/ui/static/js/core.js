@@ -1,4 +1,5 @@
 // core.js — общие утилиты интерфейса VoiceBox: состояние, запросы, DOM, диалоги, элементы управления.
+import {_t, _tf, dec, EN} from './i18n.js';
 export const TOKEN = new URLSearchParams(location.search).get('t') || '';
 
 // app — общее состояние интерфейса
@@ -54,9 +55,9 @@ export async function api(path, body, opt = {}) {
   if (body instanceof FormData || body instanceof Blob || body instanceof ArrayBuffer) init.body = body;
   else if (body !== undefined) { init.body = JSON.stringify(body); init.headers['Content-Type'] = 'application/json'; }
   let r;
-  try { r = await fetch(path, init); } catch (e) { throw new Error('Нет связи с VoiceBox — программа закрыта?'); }
+  try { r = await fetch(path, init); } catch (e) { throw new Error(_t('Нет связи с VoiceBox — программа закрыта?')); }
   const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(j.error || r.statusText || ('Ошибка ' + r.status));
+  if (!r.ok) throw new Error(j.error || r.statusText || (_t('Ошибка ') + r.status));
   return j;
 }
 const isState = j => j && typeof j === 'object' && j.config && j.sounds !== undefined && j.presets;
@@ -126,7 +127,7 @@ export function dialog({title, body, foot, wide, cls, onClose, onKey}) {
   const footEl = h('div', {class: 'dlg-f'});
   const titleEl = h('h2', {}, title);
   const box = h('div', {class: 'dlg' + (wide ? ' wide' : '')},
-    h('div', {class: 'dlg-h'}, titleEl, h('button', {class: 'btn ghost icon sm x', title: 'Закрыть (Esc)', onclick: () => d.close()}, icon('x'))),
+    h('div', {class: 'dlg-h'}, titleEl, h('button', {class: 'btn ghost icon sm x', title: _t('Закрыть (Esc)'), onclick: () => d.close()}, icon('x'))),
     bodyEl, footEl);
   const ov = h('div', {class: 'overlay ' + (cls || '')}, box);
   let downOnOverlay = false;
@@ -164,7 +165,7 @@ export function dialog({title, body, foot, wide, cls, onClose, onKey}) {
   setTimeout(() => { const f = box.querySelector('[autofocus]'); if (f) f.focus(); });
   return d;
 }
-export function confirmDlg(text, {title = 'Подтвердите', ok = 'Да', cancel = 'Отмена', danger = false} = {}) {
+export function confirmDlg(text, {title = _t('Подтвердите'), ok = _t('Да'), cancel = _t('Отмена'), danger = false} = {}) {
   return new Promise(res => {
     const d = dialog({title, body: h('p', {style: 'margin:0;color:var(--dim)'}, text), onClose: v => res(!!v),
       foot: [h('div', {class: 'grow'}), h('button', {class: 'btn', onclick: () => d.close(false)}, cancel),
@@ -176,17 +177,17 @@ export function promptDlg(title, {label = '', value = '', placeholder = '', ok =
     const inp = h('input', {class: 'input', value, placeholder, autofocus: true, onkeydown: e => { if (e.key === 'Enter') d.close(inp.value); }});
     const d = dialog({title, onClose: v => res(v == null ? null : String(v)),
       body: [label ? h('label', {class: 'field'}, h('span', {}, label), inp) : inp, hint && h('p', {class: 'hint mt-s'}, hint)],
-      foot: [h('div', {class: 'grow'}), h('button', {class: 'btn', onclick: () => d.close()}, 'Отмена'),
+      foot: [h('div', {class: 'grow'}), h('button', {class: 'btn', onclick: () => d.close()}, _t('Отмена')),
         h('button', {class: 'btn primary', onclick: () => d.close(inp.value)}, ok)]});
   });
 }
 
 // ---------- клавиши ----------
-const DISP = {TILDE: '~', '`': '~', ESC: 'Esc', SPACE: 'Пробел', ENTER: 'Enter', TAB: 'Tab', BACKSPACE: 'Backspace',
+const DISP = {TILDE: '~', '`': '~', ESC: 'Esc', SPACE: _t('Пробел'), ENTER: 'Enter', TAB: 'Tab', BACKSPACE: 'Backspace',
   PAUSE: 'Pause', CAPSLOCK: 'CapsLock', SCROLLLOCK: 'ScrollLock', PAGEUP: 'PgUp', PAGEDOWN: 'PgDn', END: 'End', HOME: 'Home',
   INSERT: 'Ins', DELETE: 'Del', LEFT: '←', RIGHT: '→', UP: '↑', DOWN: '↓', NUMMUL: 'Num *', NUMADD: 'Num +', NUMSUB: 'Num −',
-  NUMDOT: 'Num .', NUMDIV: 'Num /', MOUSE3: 'Колёсико', MOUSE4: 'Мышь 4', MOUSE5: 'Мышь 5', LSHIFT: 'Левый Shift',
-  RSHIFT: 'Правый Shift', LCTRL: 'Левый Ctrl', RCTRL: 'Правый Ctrl', LALT: 'Левый Alt', RALT: 'Правый Alt'};
+  NUMDOT: 'Num .', NUMDIV: 'Num /', MOUSE3: _t('Колёсико'), MOUSE4: _t('Мышь 4'), MOUSE5: _t('Мышь 5'), LSHIFT: _t('Левый Shift'),
+  RSHIFT: _t('Правый Shift'), LCTRL: _t('Левый Ctrl'), RCTRL: _t('Правый Ctrl'), LALT: _t('Левый Alt'), RALT: _t('Правый Alt')};
 const MODS = {CTRL: 'Ctrl', CONTROL: 'Ctrl', ALT: 'Alt', SHIFT: 'Shift', WIN: 'Win'};
 // keyLabel — подпись клавиши для человека (как keys.Display в программе)
 export function keyLabel(s) {
@@ -201,9 +202,9 @@ export function keyLabel(s) {
   }).join('+');
 }
 export const normKey = s => String(s || '').replace(/\s+/g, '').toUpperCase().replace('CONTROL', 'CTRL').replace(/(^|\+)`$/, '$1TILDE');
-export function kbd(key, {onclick, empty = 'нет', title} = {}) {
+export function kbd(key, {onclick, empty = _t('нет'), title} = {}) {
   const l = keyLabel(key);
-  return h(onclick ? 'button' : 'span', {class: 'kbd' + (l ? '' : ' none') + (onclick ? ' click' : ''), title: title || (onclick ? 'Изменить клавишу' : null),
+  return h(onclick ? 'button' : 'span', {class: 'kbd' + (l ? '' : ' none') + (onclick ? ' click' : ''), title: title || (onclick ? _t('Изменить клавишу') : null),
     onclick: onclick ? e => { e.stopPropagation(); onclick(e); } : null, style: onclick ? 'font:inherit;font-size:11.5px;font-weight:600' : null}, l || empty);
 }
 const CODES = {Backquote: 'Tilde', Space: 'Space', Tab: 'Tab', Enter: 'Enter', NumpadEnter: 'Enter', Backspace: 'Backspace',
@@ -226,28 +227,28 @@ export function hotkeyOwner(key) {
 }
 // captureKey — окно «нажмите клавишу». single — одна клавиша (кнопка рации: можно Shift/Ctrl/кнопки мыши).
 // Возвращает строку клавиши, '' — «убрать», null — отмена.
-export function captureKey({title = 'Назначить клавишу', hint, single = false, current = '', action = '', clear = true} = {}) {
+export function captureKey({title = _t('Назначить клавишу'), hint, single = false, current = '', action = '', clear = true} = {}) {
   return new Promise(res => {
     api('/api/hotkeys/pause', {on: true}).catch(() => {});
     let value = null;
     const show = h('div', {class: 'capture'});
     const info = h('div', {class: 'hint', style: 'text-align:center;min-height:20px'});
-    const okBtn = h('button', {class: 'btn primary', disabled: true, onclick: () => d.close(value)}, 'Сохранить');
+    const okBtn = h('button', {class: 'btn primary', disabled: true, onclick: () => d.close(value)}, _t('Сохранить'));
     const paint = (txt, pending) => {
-      show.replaceChildren(txt ? h('span', {style: pending ? 'opacity:.55' : ''}, txt) : h('span', {class: 'faint', style: 'font-size:16px;font-weight:500'}, single ? 'Нажмите клавишу или боковую кнопку мыши…' : 'Нажмите сочетание клавиш…'));
+      show.replaceChildren(txt ? h('span', {style: pending ? 'opacity:.55' : ''}, txt) : h('span', {class: 'faint', style: 'font-size:16px;font-weight:500'}, single ? _t('Нажмите клавишу или боковую кнопку мыши…') : _t('Нажмите сочетание клавиш…')));
     };
     const pick = k => {
       value = k; paint(keyLabel(k)); okBtn.disabled = false;
       const owner = !single && hotkeyOwner(k);
       info.className = 'hint' + (owner && owner !== action ? ' warn' : '');
-      info.textContent = owner && owner !== action ? '⚠ Сейчас эта клавиша: ' + actionLabel(owner) + '. Она перейдёт сюда.' : (owner === action && owner ? 'Уже назначена сюда' : '');
+      info.textContent = owner && owner !== action ? _t('⚠ Сейчас эта клавиша: ') + actionLabel(owner) + _t('. Она перейдёт сюда.') : (owner === action && owner ? _t('Уже назначена сюда') : '');
     };
     paint(current ? keyLabel(current) : '', !!current);
     const kd = e => {
       e.preventDefault(); e.stopPropagation();
       if (e.code === 'Escape') { d.close(null); return; }
       const k = codeName(e);
-      if (!k) { info.className = 'hint warn'; info.textContent = 'Эта клавиша не поддерживается — выберите другую'; return; }
+      if (!k) { info.className = 'hint warn'; info.textContent = _t('Эта клавиша не поддерживается — выберите другую'); return; }
       if (single) { pick(k); return; }
       if (/Shift|Ctrl|Alt/.test(k)) { paint([e.ctrlKey && 'Ctrl', e.altKey && 'Alt', e.shiftKey && 'Shift'].filter(Boolean).join('+') + '+…', true); return; }
       pick([e.ctrlKey && 'Ctrl', e.altKey && 'Alt', e.shiftKey && 'Shift', e.metaKey && 'Win', k].filter(Boolean).join('+'));
@@ -270,39 +271,41 @@ export function captureKey({title = 'Назначить клавишу', hint, s
       res(v === undefined ? null : v);
     }, onKey: () => false,
     body: [hint && h('p', {class: 'hint', style: 'margin:0'}, hint), show, info],
-    foot: [clear && current ? h('button', {class: 'btn ghost', onclick: () => d.close('')}, 'Убрать клавишу') : null, h('div', {class: 'grow'}),
-      h('button', {class: 'btn', onclick: () => d.close(null)}, 'Отмена'), okBtn]});
+    foot: [clear && current ? h('button', {class: 'btn ghost', onclick: () => d.close('')}, _t('Убрать клавишу')) : null, h('div', {class: 'grow'}),
+      h('button', {class: 'btn', onclick: () => d.close(null)}, _t('Отмена')), okBtn]});
   });
 }
 // bindKey — назначить клавишу действию через окно захвата
 export async function bindKey(action, {title, hint} = {}) {
   const cur = (app.state.hotkeys || {})[action] || '';
-  const k = await captureKey({title: title || 'Клавиша: ' + actionLabel(action), hint, current: cur, action});
+  const k = await captureKey({title: title || _t('Клавиша: ') + actionLabel(action), hint, current: cur, action});
   if (k === null) return;
-  await act('/api/hotkey', {action, key: k}, {ok: k ? keyLabel(k) + ' → ' + actionLabel(action) : 'Клавиша убрана'});
+  await act('/api/hotkey', {action, key: k}, {ok: k ? keyLabel(k) + ' → ' + actionLabel(action) : _t('Клавиша убрана')});
 }
 
 // ---------- подписи ----------
 export const soundById = id => (app.state.sounds || []).find(s => s.id === id);
 export const presetById = id => (app.state.presets || []).find(p => p.id === id);
-const BUS = {both: 'вам и в эфир', voice: 'только в эфир', monitor: 'только вам'};
+const BUS = {both: _t('вам и в эфир'), voice: _t('только в эфир'), monitor: _t('только вам')};
 export function actionLabel(act) {
   if (!act) return '';
-  const fixed = {menu: 'Быстрое меню', wheel: 'Колесо звуков', stop: 'Остановить все звуки', ui: 'Открыть окно VoiceBox', mic_mute: 'Микрофон: выкл/вкл',
-    mic_monitor: 'Слышать себя', talk: 'Голос в эфир: вкл/выкл', 'preset:next': 'Следующий эффект', 'preset:prev': 'Предыдущий эффект',
-    rosh: 'Рошан убит', clock_horn: 'Горн: игра началась (0:00)', clock_clear: 'Сбросить ручное время', reload: 'Перечитать настройки',
-    say: 'Поиск и фраза команде поверх игры', denoise: 'Шумоподавление: вкл/выкл', bg: 'Фон под голос: вкл/выкл',
-    'set:next': 'Следующий набор звуков', 'set:prev': 'Предыдущий набор звуков', 'set:all': 'Набор «Все звуки»'};
+  const fixed = {menu: _t('Быстрое меню'), wheel: _t('Колесо звуков'), stop: _t('Остановить все звуки'), ui: _t('Открыть окно VoiceBox'), mic_mute: _t('Микрофон: выкл/вкл'),
+    mic_monitor: _t('Слышать себя'), talk: _t('Голос в эфир: вкл/выкл'), 'preset:next': _t('Следующий эффект'), 'preset:prev': _t('Предыдущий эффект'),
+    rosh: _t('Рошан убит'), clock_horn: _t('Горн: игра началась (0:00)'), clock_clear: _t('Сбросить ручное время'), reload: _t('Перечитать настройки'),
+    say: _t('Поиск и фраза команде поверх игры'), denoise: _t('Шумоподавление: вкл/выкл'), bg: _t('Фон под голос: вкл/выкл'),
+    'set:next': _t('Следующий набор звуков'), 'set:prev': _t('Предыдущий набор звуков'), 'set:all': _t('Набор «Все звуки»'), 'mic:next': _t('Следующий микрофон'),
+    reader: _t('Читалка поверх игры'), 'reader:repeat': _t('Читалка: повторить фразу'), 'reader:stop': _t('Читалка: замолчать'),
+    'reader:next': _t('Читалка: следующий голос'), chat_read: _t('Чтение чата Dota 2: вкл/выкл')};
   if (fixed[act]) return fixed[act];
-  if (act.startsWith('set:')) { const s = app.state && (app.state.config.sets || []).find(x => x.id === act.slice(4)); return 'Набор «' + (s ? s.name : act.slice(4)) + '»'; }
+  if (act.startsWith('set:')) { const s = app.state && (app.state.config.sets || []).find(x => x.id === act.slice(4)); return _tf('Набор «{0}»', (s ? s.name : act.slice(4))); }
   if (act.startsWith('sound:')) {
     const [id, bus] = act.slice(6).split('@');
     const s = app.state && soundById(id);
-    return 'Звук «' + (s ? s.title : id) + '»' + (bus && BUS[bus] ? ' — ' + BUS[bus] : '');
+    return _tf('Звук «{0}»', (s ? s.title : id)) + (bus && BUS[bus] ? ' — ' + BUS[bus] : '');
   }
-  if (act.startsWith('preset:')) { const p = app.state && presetById(act.slice(7)); return 'Эффект «' + (p ? p.title : act.slice(7)) + '»'; }
-  if (act.startsWith('clock_sync:')) return 'Игровое время = ' + act.slice(11);
-  if (act.startsWith('source_mute:')) return 'Источник: выкл/вкл';
+  if (act.startsWith('preset:')) { const p = app.state && presetById(act.slice(7)); return _tf('Эффект «{0}»', (p ? p.title : act.slice(7))); }
+  if (act.startsWith('clock_sync:')) return _t('Игровое время = ') + act.slice(11);
+  if (act.startsWith('source_mute:')) return _t('Источник: выкл/вкл');
   return act;
 }
 
@@ -321,16 +324,17 @@ export function parseTime(v) {
   if (isNaN(n)) return null;
   return neg ? -n : n;
 }
-export const fmtDur = s => !s ? '' : s < 60 ? (s < 10 ? s.toFixed(1).replace('.', ',') : Math.round(s)) + ' с' : fmtTime(s);
+export const fmtDur = s => !s ? '' : s < 60 ? (s < 10 ? dec(s.toFixed(1)) : Math.round(s)) + _t(' с') : fmtTime(s);
 export const pct = v => Math.round((v || 0) * 100) + '%';
 export function plural(n, one, few, many) {
+  if (EN) return Math.abs(n) === 1 ? one : many;
   const a = Math.abs(n) % 100, b = a % 10;
   if (a > 10 && a < 20) return many;
   if (b > 1 && b < 5) return few;
   if (b === 1) return one;
   return many;
 }
-export const secText = n => n + ' ' + plural(n, 'секунда', 'секунды', 'секунд');
+export const secText = n => n + ' ' + plural(n, _t('секунда'), _t('секунды'), _t('секунд'));
 
 // ---------- устройства ----------
 const VIRT = /vb-audio|voicemeeter|vaio|virtual|\bcable\b|\bvac\b|^line ?\d+\s*(\(|$)/i;

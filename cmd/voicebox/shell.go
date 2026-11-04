@@ -1,10 +1,13 @@
 package main
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/qwkejkqwje1/dota-voicebox/internal/app"
+	"github.com/qwkejkqwje1/dota-voicebox/internal/audio"
 	"github.com/qwkejkqwje1/dota-voicebox/internal/config"
+	"github.com/qwkejkqwje1/dota-voicebox/internal/i18n"
 	"github.com/qwkejkqwje1/dota-voicebox/internal/keys"
 	"github.com/qwkejkqwje1/dota-voicebox/internal/overlay"
 	"github.com/qwkejkqwje1/dota-voicebox/internal/winapi"
@@ -31,14 +34,16 @@ func (m menuSource) MenuData() overlay.Data {
 	d.Search = conv(m.a.SearchItems())
 	for i := range d.Search {
 		if d.Search[i].Kind == "effect" && d.Search[i].Hint == "" {
-			d.Search[i].Hint = "эффект"
+			d.Search[i].Hint = i18n.T("эффект")
 		}
 	}
 	d.Phrases = m.a.RecentPhrases()
 	d.CanSay = m.a.CanSay()
+	voices, cur, hist := m.a.ReaderMenu()
+	d.Voices, d.Voice, d.ReadHist = conv(voices), cur, hist
 	if cfg := m.a.Config(); len(d.Sounds) == 0 && cfg.Set(cfg.ActiveSet) != nil {
 		title, _ := app.SetTitle(cfg, cfg.ActiveSet)
-		d.Empty = "В наборе «" + title + "» нет звуков · Enter — поиск"
+		d.Empty = fmt.Sprintf(i18n.T("В наборе «%s» нет звуков · Enter — поиск"), title)
 	}
 	return d
 }
@@ -80,18 +85,33 @@ func trayItems(a *app.App) []winapi.TrayItem {
 		title, _ := app.PresetTitle(id)
 		fx = append(fx, winapi.TrayItem{ID: "preset:" + id, Title: title, Checked: id == cur})
 	}
+	// микрофоны: настоящие устройства, отмечен выбранный (или «как в Windows»)
+	mics := []winapi.TrayItem{{ID: "mic:", Title: i18n.T("Как в Windows (по умолчанию)"), Checked: cfg.Devices.Mic == ""}}
+	if capture, _, err := audio.Devices(); err == nil {
+		for _, d := range capture {
+			if !d.Virtual && !audio.IsCableInput(d.Name) {
+				mics = append(mics, winapi.TrayItem{ID: "mic:" + d.Name, Title: d.Name, Checked: strings.EqualFold(cfg.Devices.Mic, d.Name)})
+			}
+		}
+	}
+	if k := keys.Display(hk["mic:next"]); k != "" {
+		mics = append(mics, winapi.TrayItem{Sep: true}, winapi.TrayItem{ID: "mic:next", Title: i18n.T("Следующий микрофон") + "\t" + k})
+	}
 	items := []winapi.TrayItem{
-		{ID: "open", Title: withKey("Открыть VoiceBox", "ui"), Default: true},
-		{ID: "menu", Title: withKey("Быстрое меню", "menu"), Disabled: !cfg.QuickMenu.Enabled},
-		{ID: "wheel", Title: withKey("Колесо звуков", "wheel"), Disabled: !cfg.Wheel.Enabled},
+		{ID: "open", Title: withKey(i18n.T("Открыть VoiceBox"), "ui"), Default: true},
+		{ID: "menu", Title: withKey(i18n.T("Быстрое меню"), "menu"), Disabled: !cfg.QuickMenu.Enabled},
+		{ID: "wheel", Title: withKey(i18n.T("Колесо звуков"), "wheel"), Disabled: !cfg.Wheel.Enabled},
+		{ID: "reader", Title: withKey(i18n.T("Читалка"), "reader")},
 		{Sep: true},
-		{Title: "Эффект голоса", Sub: fx, Disabled: len(fx) == 0},
-		{ID: "mic_mute", Title: withKey("Микрофон выключен", "mic_mute"), Checked: cfg.Mic.Mute},
-		{ID: "stop", Title: withKey("Остановить звуки", "stop")},
+		{Title: i18n.T("Эффект голоса"), Sub: fx, Disabled: len(fx) == 0},
+		{Title: i18n.T("Микрофон"), Sub: mics},
+		{ID: "mic_mute", Title: withKey(i18n.T("Микрофон выключен"), "mic_mute"), Checked: cfg.Mic.Mute},
+		{ID: "stop", Title: withKey(i18n.T("Остановить звуки"), "stop")},
 		{Sep: true},
-		{ID: "dota", Title: "Модуль Dota 2", Checked: cfg.Dota.Enabled},
+		{ID: "dota", Title: i18n.T("Модуль Dota 2"), Checked: cfg.Dota.Enabled},
+		{ID: "chat_read", Title: withKey(i18n.T("Читать чат Dota 2 вслух"), "chat_read"), Checked: cfg.Reader.Chat.Enabled},
 		{Sep: true},
-		{ID: "quit", Title: "Выход"},
+		{ID: "quit", Title: i18n.T("Выход")},
 	}
 	return items
 }
@@ -104,7 +124,9 @@ func trayAction(a *app.App, sh *winapi.Shell, id string, show, quit func()) {
 		sh.OpenMenu()
 	case "wheel":
 		sh.OpenWheel(0)
-	case "mic_mute", "stop":
+	case "reader":
+		sh.OpenReader()
+	case "mic_mute", "stop", "mic:next", "chat_read":
 		a.Do(id)
 	case "dota":
 		a.UpdateConfig(func(c *config.Config) { c.Dota.Enabled = !c.Dota.Enabled })
@@ -113,6 +135,9 @@ func trayAction(a *app.App, sh *winapi.Shell, id string, show, quit func()) {
 	default:
 		if p, ok := strings.CutPrefix(id, "preset:"); ok {
 			a.SetPreset(p, true)
+		}
+		if m, ok := strings.CutPrefix(id, "mic:"); ok {
+			a.UpdateConfig(func(c *config.Config) { c.Devices.Mic = m })
 		}
 	}
 }
@@ -123,7 +148,7 @@ func trayTip(a *app.App) string {
 	title, _ := app.PresetTitle(st.Preset)
 	tip := "VoiceBox — " + title
 	if st.MicMute {
-		tip += " · микрофон выключен"
+		tip += " · " + i18n.T("микрофон выключен")
 	}
 	return tip
 }

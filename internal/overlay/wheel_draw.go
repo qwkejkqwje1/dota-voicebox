@@ -5,6 +5,8 @@ import (
 	"image/color"
 	"math"
 	"strings"
+
+	"github.com/qwkejkqwje1/dota-voicebox/internal/i18n"
 )
 
 // Рисование колеса: 8 секторов-«долек» с постоянными зазорами, выбранный выдвигается и
@@ -228,16 +230,16 @@ func (r *Renderer) wheelCenter(img *image.RGBA, v WheelView, c float64, px func(
 	tf := r.F.face(r.F.Bold, px(13.5))
 	if v.Hover >= 0 && v.Hover < len(v.Items) {
 		lines = wrapLines(tf, v.Items[v.Hover].Label, px(92), 2)
-		hint = "отпустите"
+		hint = i18n.T("отпустите")
 		if v.Sticky {
-			hint = "щёлкните"
+			hint = i18n.T("щёлкните")
 		}
 	} else {
 		tf = r.F.face(r.F.Regular, px(12.5))
 		main = colDim
-		lines = []string{"Ведите мышь", "к звуку"}
+		lines = []string{i18n.T("Ведите мышь"), i18n.T("к звуку")}
 		if v.Sticky {
-			lines, hint = []string{"Щёлкните", "по звуку"}, "Esc — закрыть"
+			lines, hint = []string{i18n.T("Щёлкните"), i18n.T("по звуку")}, i18n.T("Esc — закрыть")
 		}
 	}
 	hf := r.F.face(r.F.Regular, px(10.5))

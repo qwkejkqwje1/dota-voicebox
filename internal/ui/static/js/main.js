@@ -1,10 +1,12 @@
 // main.js — оболочка интерфейса: меню слева, шапка, страницы, живые данные.
+import {_t} from './i18n.js';
 import {app, h, $, api, act, set, toast, setState, setRenderer, reload, clearLive, emitLive, paintMeters, keyLabel, confirmDlg,
   fmtTime, go, presetById, TOKEN, icon} from './core.js';
 import soundsPage, {importFiles} from './pages/sounds.js';
 import voicePage from './pages/voice.js';
 import menuPage from './pages/menu.js';
 import wheelPage from './pages/wheel.js';
+import readerPage from './pages/reader.js';
 import phonePage, {phoneSig} from './pages/phone.js';
 import dotaPage from './pages/dota.js';
 import settingsPage from './pages/settings.js';
@@ -15,17 +17,18 @@ import {maybeWizard} from './wizard.js';
 import {syncEmoji} from './emoji.js';
 
 const PAGES = [
-  {id: 'sounds', icon: '🔊', label: 'Звуки', title: 'Звуки', render: soundsPage},
-  {id: 'voice', icon: '🎙️', label: 'Голос', title: 'Голос и эффекты', render: voicePage},
-  {id: 'menu', icon: '⚡', label: 'Меню в игре', title: 'Быстрое меню поверх игры', render: menuPage},
-  {id: 'wheel', icon: '🎯', label: 'Колесо', title: 'Колесо звуков', render: wheelPage},
-  {id: 'phone', icon: '📱', label: 'Телефон', title: 'Пульт с телефона', render: phonePage, sig: phoneSig},
-  {id: 'dota', icon: '🐲', label: 'Dota 2', title: 'Модуль Dota 2', render: dotaPage},
-  {id: 'settings', icon: '⚙️', label: 'Настройки', title: 'Настройки', render: settingsPage},
-  {id: 'check', icon: '🩺', label: 'Проверка', title: 'Проверка и помощь', render: checkPage},
-  {sep: 'Для опытных'},
-  {id: 'scripts', icon: '📜', label: 'Скрипты', title: 'Скрипты', render: scriptsPage},
-  {id: 'log', icon: '🧾', label: 'Журнал', title: 'Журнал', render: logPage},
+  {id: 'sounds', icon: '🔊', label: _t('Звуки'), title: _t('Звуки'), render: soundsPage},
+  {id: 'voice', icon: '🎙️', label: _t('Голос'), title: _t('Голос и эффекты'), render: voicePage},
+  {id: 'menu', icon: '⚡', label: _t('Меню в игре'), title: _t('Быстрое меню поверх игры'), render: menuPage},
+  {id: 'wheel', icon: '🎯', label: _t('Колесо'), title: _t('Колесо звуков'), render: wheelPage},
+  {id: 'reader', icon: '🎭', label: _t('Читалка'), title: _t('Читалка — текст голосом персонажа'), render: readerPage},
+  {id: 'phone', icon: '📱', label: _t('Телефон'), title: _t('Пульт с телефона'), render: phonePage, sig: phoneSig},
+  {id: 'dota', icon: '🐲', label: 'Dota 2', title: _t('Модуль Dota 2'), render: dotaPage},
+  {id: 'settings', icon: '⚙️', label: _t('Настройки'), title: _t('Настройки'), render: settingsPage},
+  {id: 'check', icon: '🩺', label: _t('Проверка'), title: _t('Проверка и помощь'), render: checkPage},
+  {sep: _t('Для опытных')},
+  {id: 'scripts', icon: '📜', label: _t('Скрипты'), title: _t('Скрипты'), render: scriptsPage},
+  {id: 'log', icon: '🧾', label: _t('Журнал'), title: _t('Журнал'), render: logPage},
 ];
 const pageOf = id => PAGES.find(p => p.id === id) || PAGES[0];
 
@@ -38,7 +41,7 @@ function buildNav() {
       h('button', {class: 'navbtn', 'data-page': p.id, title: p.label, onclick: () => navigate(p.id)},
         h('span', {class: 'ni'}, p.icon), h('span', {class: 'nl'}, p.label), h('span', {class: 'nb hidden'}))),
     h('div', {class: 'navfoot'},
-      h('button', {class: 'navbtn', title: 'Закрыть VoiceBox полностью', onclick: quit}, h('span', {class: 'ni'}, icon('power', 17)), h('span', {class: 'nl'}, 'Выход'))));
+      h('button', {class: 'navbtn', title: _t('Закрыть VoiceBox полностью'), onclick: quit}, h('span', {class: 'ni'}, icon('power', 17)), h('span', {class: 'nl'}, _t('Выход')))));
 }
 function paintNav() {
   const s = app.state;
@@ -54,9 +57,9 @@ function paintNav() {
   }
 }
 async function quit() {
-  if (await confirmDlg('Звуки, эффекты голоса и быстрое меню перестанут работать до следующего запуска.', {title: 'Закрыть VoiceBox?', ok: 'Закрыть', danger: true})) {
+  if (await confirmDlg(_t('Звуки, эффекты голоса и быстрое меню перестанут работать до следующего запуска.'), {title: _t('Закрыть VoiceBox?'), ok: _t('Закрыть'), danger: true})) {
     api('/api/quit', {}).catch(() => {});
-    document.body.replaceChildren(h('div', {class: 'empty', style: 'margin-top:20vh'}, h('div', {class: 'big'}, '👋'), h('h2', {}, 'VoiceBox закрыт'), h('p', {}, 'Окно можно закрыть.')));
+    document.body.replaceChildren(h('div', {class: 'empty', style: 'margin-top:20vh'}, h('div', {class: 'big'}, '👋'), h('h2', {}, _t('VoiceBox закрыт')), h('p', {}, _t('Окно можно закрыть.'))));
   }
 }
 
@@ -74,27 +77,27 @@ function paintTop(force) {
   if (sig === topSig && !force) return;
   topSig = sig;
   const chips = [];
-  if (app.offline) chips.push(h('span', {class: 'chip bad'}, '⚠ Нет связи с программой…'));
-  if (s.demo) chips.push(h('span', {class: 'chip', title: 'VOICEBOX_DEMO: без настоящих звуковых устройств'}, '🧪 Демо'));
-  if (!st.audio.running) chips.push(h('button', {class: 'chip bad', onclick: () => go('check'), title: st.audio.error || ''}, '⚠ Звук не запущен'));
-  else if (!st.audio.cable_found) chips.push(h('button', {class: 'chip warn', onclick: () => go('check')}, '⚠ Нет виртуального кабеля'));
-  if (st.dota && g.has_clock) chips.push(h('button', {class: 'chip live', onclick: () => go('dota'), title: 'Игровое время Dota 2'}, h('span', {class: 'dot'}), '🐲 ' + fmtTime(g.clock) + (g.paused ? ' ⏸' : '')));
+  if (app.offline) chips.push(h('span', {class: 'chip bad'}, _t('⚠ Нет связи с программой…')));
+  if (s.demo) chips.push(h('span', {class: 'chip', title: _t('VOICEBOX_DEMO: без настоящих звуковых устройств')}, _t('🧪 Демо')));
+  if (!st.audio.running) chips.push(h('button', {class: 'chip bad', onclick: () => go('check'), title: st.audio.error || ''}, _t('⚠ Звук не запущен')));
+  else if (!st.audio.cable_found) chips.push(h('button', {class: 'chip warn', onclick: () => go('check')}, _t('⚠ Нет виртуального кабеля')));
+  if (st.dota && g.has_clock) chips.push(h('button', {class: 'chip live', onclick: () => go('dota'), title: _t('Игровое время Dota 2')}, h('span', {class: 'dot'}), '🐲 ' + fmtTime(g.clock) + (g.paused ? ' ⏸' : '')));
   if (st.talk && st.talk.mode !== 'always') {
-    const k = keyLabel(st.talk.key) || 'кнопка не задана';
+    const k = keyLabel(st.talk.key) || _t('кнопка не задана');
     chips.push(h('button', {class: 'chip' + (st.talk.open ? ' live' : ''), onclick: () => go('voice'),
-      title: st.talk.mode === 'ptt' ? 'Вас слышно, пока держите кнопку' : 'Нажмите кнопку — включить/выключить голос'},
+      title: st.talk.mode === 'ptt' ? _t('Вас слышно, пока держите кнопку') : _t('Нажмите кнопку — включить/выключить голос')},
       h('span', {class: 'dot'}), (st.talk.mode === 'ptt' ? '✊ ' : '🔘 ') + k));
   }
-  if (playing) chips.push(h('button', {class: 'chip', onclick: () => act('/api/stop', {}), title: 'Остановить все звуки'}, '⏹ Стоп'));
-  if (preset) chips.push(h('button', {class: 'chip', onclick: () => go('voice'), title: 'Эффект голоса'}, (preset.emoji || '🎛️') + ' ' + preset.title));
+  if (playing) chips.push(h('button', {class: 'chip', onclick: () => act('/api/stop', {}), title: _t('Остановить все звуки')}, _t('⏹ Стоп')));
+  if (preset) chips.push(h('button', {class: 'chip', onclick: () => go('voice'), title: _t('Эффект голоса')}, (preset.emoji || '🎛️') + ' ' + preset.title));
   const sets = s.config.sets || [];
   if (sets.length) {
     const cur = sets.find(x => x.id === st.set);
-    chips.push(h('button', {class: 'chip', onclick: () => go('sounds'), title: 'Набор звуков: панель, меню и колесо'}, cur ? (cur.emoji || '🗂️') + ' ' + cur.name : '🎛️ Все звуки'));
+    chips.push(h('button', {class: 'chip', onclick: () => go('sounds'), title: _t('Набор звуков: панель, меню и колесо')}, cur ? (cur.emoji || '🗂️') + ' ' + cur.name : _t('🎛️ Все звуки')));
   }
-  chips.push(h('button', {class: 'chip' + (st.mic_mute ? ' muted' : ''), title: st.mic_mute ? 'Микрофон выключен — нажмите, чтобы включить' : 'Нажмите, чтобы выключить микрофон',
-    onclick: () => set({mic_mute: !st.mic_mute}, {ok: st.mic_mute ? '🎙️ Микрофон включён' : '🔇 Микрофон выключен'})},
-    st.mic_mute ? '🔇' : '🎙️', st.mic_mute ? 'Выключен' : h('span', {class: 'mini', 'data-meter': 'mic_in'}, h('i'))));
+  chips.push(h('button', {class: 'chip' + (st.mic_mute ? ' muted' : ''), title: st.mic_mute ? _t('Микрофон выключен — нажмите, чтобы включить') : _t('Нажмите, чтобы выключить микрофон'),
+    onclick: () => set({mic_mute: !st.mic_mute}, {ok: st.mic_mute ? _t('🎙️ Микрофон включён') : _t('🔇 Микрофон выключен')})},
+    st.mic_mute ? '🔇' : '🎙️', st.mic_mute ? _t('Выключен') : h('span', {class: 'mini', 'data-meter': 'mic_in'}, h('i'))));
   $('#topbar').replaceChildren(...chips);
 }
 
@@ -104,7 +107,9 @@ function guarded() {
   if (pointerDown) return true;
   if ($('#layer').children.length) return true;
   const a = document.activeElement;
-  return !!(a && a.closest && a.closest('#page') && (a.tagName === 'TEXTAREA' || (a.tagName === 'INPUT' && /^(text|search|number)$/.test(a.type))));
+  // data-keep — поле само переживает перерисовку (страница восстанавливает текст и курсор)
+  return !!(a && a.closest && a.closest('#page') && !(a.dataset && a.dataset.keep) &&
+    (a.tagName === 'TEXTAREA' || (a.tagName === 'INPUT' && /^(text|search|number)$/.test(a.type))));
 }
 let pageSig = null;
 function render(enter) {
@@ -119,7 +124,7 @@ function render(enter) {
   const el = $('#page');
   const scroll = el.scrollTop;
   let node;
-  try { node = pageOf(app.page).render(); } catch (e) { console.error(e); node = h('div', {class: 'hint box warn'}, 'Ошибка страницы: ' + e.message); }
+  try { node = pageOf(app.page).render(); } catch (e) { console.error(e); node = h('div', {class: 'hint box warn'}, _t('Ошибка страницы: ') + e.message); }
   el.replaceChildren(h('div', {class: 'page' + (enter ? ' enter' : '')}, node));
   el.scrollTop = enter ? 0 : scroll;
   paintNav();
@@ -144,8 +149,8 @@ document.addEventListener('drop', released, true);
 document.addEventListener('focusout', () => setTimeout(() => { if (app.dirty) render(false); }, 80), true);
 // боковые кнопки мыши не должны листать «назад/вперёд»
 window.addEventListener('mouseup', e => { if (e.button === 3 || e.button === 4) e.preventDefault(); });
-window.addEventListener('error', e => toast('Ошибка интерфейса: ' + e.message, 'err'));
-window.addEventListener('unhandledrejection', e => toast('Ошибка интерфейса: ' + ((e.reason && e.reason.message) || e.reason), 'err'));
+window.addEventListener('error', e => toast(_t('Ошибка интерфейса: ') + e.message, 'err'));
+window.addEventListener('unhandledrejection', e => toast(_t('Ошибка интерфейса: ') + ((e.reason && e.reason.message) || e.reason), 'err'));
 
 // ---------- файлы со всего окна ----------
 let dragDepth = 0;
@@ -202,7 +207,7 @@ buildNav();
   try {
     setState(await api('/api/state'), false);
   } catch (e) {
-    $('#page').replaceChildren(h('div', {class: 'empty'}, h('div', {class: 'big'}, '⚠️'), h('h2', {}, 'Не удалось связаться с VoiceBox'), h('p', {}, e.message)));
+    $('#page').replaceChildren(h('div', {class: 'empty'}, h('div', {class: 'big'}, '⚠️'), h('h2', {}, _t('Не удалось связаться с VoiceBox')), h('p', {}, e.message)));
     return;
   }
   const hp = location.hash.slice(1);

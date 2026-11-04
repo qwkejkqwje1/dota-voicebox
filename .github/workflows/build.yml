@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: write
+  actions: read # SignPath скачивает неподписанный exe из артефактов сборки
 
 jobs:
   test:
@@ -34,14 +35,51 @@ jobs:
           CGO_ENABLED: "1"
         run: |
           VER="${GITHUB_REF_NAME}"
+          if [[ "$VER" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            # версия релиза — в свойствах exe (Свойства → Подробно) и в запросе на подпись
+            go run github.com/tc-hib/go-winres@v0.3.3 make --in winres/winres.json --out cmd/voicebox/rsrc --arch amd64 \
+              --file-version "${VER#v}" --product-version "${VER#v}"
+          fi
           go build -trimpath -ldflags "-s -w -H windowsgui -X main.version=${VER}" -o dist/voicebox.exe ./cmd/voicebox
           cp config.example.json dist/
-          cp README.md CHANGELOG.md dist/
+          cp README.md README.en.md CHANGELOG.md dist/
           mkdir -p dist/sounds dist/gsi
           cp sounds/README.md dist/sounds/
           cp gsi/*.cfg dist/gsi/
           mkdir -p dist/licenses
           cp internal/rnnoise/COPYING dist/licenses/rnnoise.txt
+      # Подпись кода (Authenticode) через SignPath — бесплатно для open source (SignPath Foundation).
+      # Включается, когда в репозитории заданы переменная SIGNPATH_ORGANIZATION_ID и секрет SIGNPATH_API_TOKEN
+      # (см. README → «Подпись кода»). Без них релиз собирается как раньше, без подписи.
+      - name: Upload unsigned exe
+        id: unsigned
+        if: startsWith(github.ref, 'refs/tags/v') && vars.SIGNPATH_ORGANIZATION_ID != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: voicebox-unsigned
+          path: dist/voicebox.exe
+          if-no-files-found: error
+      - name: Code signing (SignPath)
+        if: steps.unsigned.outcome == 'success'
+        uses: signpath/github-action-submit-signing-request@v1
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG || 'dota-voicebox' }}
+          signing-policy-slug: ${{ vars.SIGNPATH_POLICY_SLUG || 'release-signing' }}
+          artifact-configuration-slug: ${{ vars.SIGNPATH_ARTIFACT_CONFIG || 'initial' }}
+          github-artifact-id: ${{ steps.unsigned.outputs.artifact-id }}
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 3600
+          output-artifact-directory: signed
+      - name: Use signed exe
+        if: steps.unsigned.outcome == 'success'
+        shell: pwsh
+        run: |
+          $sig = Get-AuthenticodeSignature signed/voicebox.exe
+          if ($sig.Status -ne 'Valid') { throw "SignPath вернул exe без действующей подписи: $($sig.Status)" }
+          Write-Host "Подпись: $($sig.SignerCertificate.Subject)"
+          Copy-Item signed/voicebox.exe dist/voicebox.exe -Force
       - name: Sign update
         if: startsWith(github.ref, 'refs/tags/v')
         shell: bash

@@ -1,6 +1,7 @@
 package overlay
 
 import (
+	"fmt"
 	"image"
 	"image/color"
 	"image/draw"
@@ -11,6 +12,8 @@ import (
 	"unicode"
 
 	"golang.org/x/image/vector"
+
+	"github.com/qwkejkqwje1/dota-voicebox/internal/i18n"
 )
 
 // Набор текста прямо в меню поверх игры: Enter (или своя клавиша) — строка поиска. Набранное ищется среди
@@ -41,6 +44,7 @@ func (c *Controller) StartTyping() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.visible {
+		c.reader = false
 		c.startTypingLocked()
 	}
 }
@@ -54,11 +58,15 @@ func (c *Controller) startTypingLocked() {
 }
 
 func (c *Controller) stopTypingLocked() {
-	c.typing, c.query, c.results, c.hover = false, nil, nil, -1
+	c.typing, c.query, c.results, c.hover, c.reader = false, nil, nil, -1, false
 }
 
 // searchLocked пересчитывает результаты для набранного текста.
 func (c *Controller) searchLocked() {
+	if c.reader {
+		c.readerRowsLocked()
+		return
+	}
 	q := strings.TrimSpace(string(c.query))
 	var out []Item
 	if q == "" {
@@ -66,12 +74,22 @@ func (c *Controller) searchLocked() {
 			if len(out) == searchRows {
 				break
 			}
-			out = append(out, Item{Kind: "say", ID: p, Emoji: "🗣️", Label: p, Color: "#8b5cf6", Hint: "недавняя фраза"})
+			out = append(out, Item{Kind: "say", ID: p, Emoji: "🗣️", Label: p, Color: "#8b5cf6", Hint: i18n.T("недавняя фраза")})
 		}
 	} else {
-		out = Find(c.data.Search, q, searchRows)
+		v, read := c.curVoiceLocked()
+		read = read && c.data.CanSay
+		limit := searchRows
+		if read {
+			limit-- // строк столько же: вместо одного найденного — «Прочитать голосом»
+		}
+		out = Find(c.data.Search, q, limit)
 		if c.data.CanSay {
-			out = append(out, Item{Kind: "say", ID: q, Emoji: "🗣️", Label: "Сказать команде: «" + q + "»", Color: "#8b5cf6"})
+			out = append(out, Item{Kind: "say", ID: q, Emoji: "🗣️", Label: fmt.Sprintf(i18n.T("Сказать команде: «%s»"), q), Color: "#8b5cf6"})
+		}
+		if read {
+			out = append(out, Item{Kind: "read:" + v.ID, ID: q, Emoji: v.Emoji, Label: fmt.Sprintf(i18n.T("Прочитать голосом «%s»: «%s»"), v.Label, q),
+				Color: readColor})
 		}
 	}
 	c.results = out
@@ -85,6 +103,11 @@ func (c *Controller) searchLocked() {
 
 // typeKeyLocked — клавиша в режиме набора. Все клавиши, кроме модификаторов, остаются в меню (игра их не получает).
 func (c *Controller) typeKeyLocked(k KeyInput) Result {
+	if c.reader {
+		if r, ok := c.readerKeyLocked(k); ok {
+			return r
+		}
+	}
 	switch k.VK {
 	case VKEscape:
 		c.stopTypingLocked()
@@ -144,7 +167,7 @@ func (c *Controller) activateLocked(i int, say bool) Result {
 	}
 	// после выбора строка поиска закрывается: клавиши снова идут в игру
 	c.stopTypingLocked()
-	closeAfter := c.data.CloseAfterPick || kind == "say"
+	closeAfter := c.data.CloseAfterPick || kind == "say" || strings.HasPrefix(kind, "read")
 	if closeAfter {
 		c.visible = false
 	}
@@ -164,10 +187,13 @@ func printable(s string) string {
 
 // typingViewLocked — меню в режиме набора: всегда список, вместо вкладок — строка поиска.
 func (c *Controller) typingViewLocked(scale float64) MenuView {
+	if c.reader {
+		return c.readerViewLocked(scale)
+	}
 	v := MenuView{Layout: LayoutList, Typing: true, Query: string(c.query), Hover: c.hover, Pages: 1, Scale: scale,
-		Opacity: c.data.Opacity, Hint: "Звук, эффект или фраза для команды"}
+		Opacity: c.data.Opacity, Hint: i18n.T("Звук, эффект или фраза для команды")}
 	if !c.data.CanSay {
-		v.Hint = "Название звука или эффекта"
+		v.Hint = i18n.T("Название звука или эффекта")
 	}
 	for i, it := range c.results {
 		it.Key = ""
@@ -179,16 +205,16 @@ func (c *Controller) typingViewLocked(scale float64) MenuView {
 	if len(v.Items) == 0 {
 		switch {
 		case len(c.query) > 0:
-			v.Empty = "Ничего не нашлось"
+			v.Empty = i18n.T("Ничего не нашлось")
 		case c.data.CanSay:
-			v.Empty = "Напишите — найду звук или скажу команде"
+			v.Empty = i18n.T("Напишите — найду звук или скажу команде")
 		default:
-			v.Empty = "Напишите название звука"
+			v.Empty = i18n.T("Напишите название звука")
 		}
 	}
-	v.Footer = "↑↓ выбор  ·  Enter  ·  Ctrl+Enter сказать  ·  Esc назад"
+	v.Footer = i18n.T("↑↓ выбор  ·  Enter  ·  Ctrl+Enter сказать  ·  Esc назад")
 	if !c.data.CanSay {
-		v.Footer = "↑↓ выбор  ·  Enter  ·  Esc назад"
+		v.Footer = i18n.T("↑↓ выбор  ·  Enter  ·  Esc назад")
 	}
 	return v
 }
@@ -304,6 +330,9 @@ func (r *Renderer) searchBox(img *image.RGBA, L *Layout, v MenuView, x0, y, inne
 
 	tx := box.x + px(30)
 	maxW := box.x + box.w - px(10) - tx
+	if v.Badge != "" {
+		maxW -= r.pill(img, box, v.Badge, v.BadgeEmoji, px) + px(6)
+	}
 	base := box.y + (box.h+capHeight(r.F.face(r.F.Bold, px(14))))/2
 	if v.Query == "" {
 		f := r.F.face(r.F.Regular, px(13))
@@ -319,6 +348,30 @@ func (r *Renderer) searchBox(img *image.RGBA, L *Layout, v MenuView, x0, y, inne
 	gripDots(img, g, colFaint, px)
 	L.Grip = g.image()
 	return y + px(tabsH+8)
+}
+
+// pill — плашка справа в строке набора (голос «Читалки»): значок и имя. Возвращает ширину.
+func (r *Renderer) pill(img *image.RGBA, box rect, label, emoji string, px func(float64) float64) float64 {
+	f := r.F.face(r.F.Bold, px(12))
+	label = ellipsize(f, label, px(110))
+	es := px(18)
+	var e image.Image
+	if r.Emoji != nil && emoji != "" {
+		e = r.Emoji.Emoji(emoji)
+	}
+	w := px(10) + measure(f, label) + px(10)
+	if e != nil {
+		w += es + px(5)
+	}
+	p := rect{box.x + box.w - px(5) - w, box.y + px(5), w, box.h - px(10)}
+	fillRound(img, p, p.h/2, withAlpha(rgba(readColor, colAccent), 80))
+	x := p.x + px(10)
+	if e != nil {
+		drawImageFit(img, e, rect{p.x + px(7), p.y + (p.h-es)/2, es, es})
+		x = p.x + px(7) + es + px(5)
+	}
+	text(img, f, label, x, p.y+(p.h+capHeight(f))/2, colText)
+	return w
 }
 
 // tailFit — конец строки, который помещается в ширину (начало — «…»).

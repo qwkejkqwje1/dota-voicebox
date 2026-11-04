@@ -64,3 +64,32 @@ func TestVictoryDefeat(t *testing.T) {
 		t.Fatalf("зритель: %v", e)
 	}
 }
+
+func TestEventsTolerant(t *testing.T) {
+	s := st(`{"map":{"matchid":"1"},"events":[
+		{"game_time": 812.5, "event_type": "chat_message", "player_id": 3, "channel_type": 12, "message": "мид ss"},
+		{"game_time": "900", "event_type": "roshan_killed", "killed_by_team": "dire"},
+		{"event_type": "chat_message", "player_id": "7", "message": 5},
+		"мусор", {"event_type": {"x": 1}}],
+		"player":{"team_name":"dire","player_slot":"132","team_slot":4}}`)
+	if len(s.Events) != 5 {
+		t.Fatalf("событий: %d", len(s.Events))
+	}
+	e := s.Events[0]
+	if e.EventType != EvChat || e.GameTime != 812.5 || e.PlayerID != 3 || e.ChannelType != ChatTeam || e.Message != "мид ss" {
+		t.Fatalf("чат: %+v", e)
+	}
+	if r := s.Events[1]; r.GameTime != 900 || r.Team != "dire" || r.PlayerID != -1 {
+		t.Fatalf("рошан: %+v", r)
+	}
+	if c := s.Events[2]; c.PlayerID != 7 || c.Message != "" {
+		t.Fatalf("странный чат: %+v", c)
+	}
+	if !s.Player.PlayerSlot.Ok || s.Player.PlayerSlot.V != 132 || s.Player.TeamSlot.V != 4 {
+		t.Fatalf("слоты: %+v %+v", s.Player.PlayerSlot, s.Player.TeamSlot)
+	}
+	// events — не список: пакет всё равно разбирается
+	if s2 := st(`{"map":{"matchid":"2"},"events":{"a":1}}`); s2.Map == nil || len(s2.Events) != 0 {
+		t.Fatal("events-объект сломал пакет")
+	}
+}
